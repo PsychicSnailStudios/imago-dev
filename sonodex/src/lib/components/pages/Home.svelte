@@ -11,9 +11,9 @@
 	import { Button } from "$shadcn/button/index.js";
 	
 	// CUSTOM COMPONENTS
-	import TopTracks from "$lib/components/pages/profile/Analytics.svelte";
-   import Resume from "$lib/components/pages/profile/Resume.svelte";
-   import Explore from "$lib/components/pages/profile/Explore.svelte";
+	import TopTracks from "$lib/components/pages/home/Analytics.svelte";
+   import Resume from "$lib/components/pages/home/Resume.svelte";
+   import Explore from "$lib/components/pages/home/Explore.svelte";
 	import AddProfile from "$lib/components/dialogs/profile/AddProfile.svelte";
 	import EditProfile from "$lib/components/dialogs/profile/EditProfile.svelte";
 	import SwichProfile from "$lib/components/dialogs/profile/SwichProfile.svelte";

@@ -26,7 +26,7 @@
 	async function play(e: MouseEvent) {
 		e.stopPropagation();
 		const tracks = await getTrackArrayFromUID(playlist.uid);
-		queueTracksByObject(tracks, true);
+		queueTracksByObject(tracks, true, false, playlist.uid);
 	}
 </script>
 

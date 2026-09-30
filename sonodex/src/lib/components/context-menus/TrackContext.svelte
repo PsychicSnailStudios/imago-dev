@@ -15,7 +15,7 @@
    import type { Track } from "$ts/util/types";
 
 	// PROPS
-	let { track, inQueue = false, displayIndex = null } = $props<{ track: Track; inQueue?: boolean; displayIndex?: number | null }>();
+	let { track, inQueue = false, displayIndex = null, sourceUid = null } = $props<{ track: Track; inQueue?: boolean; displayIndex?: number | null; sourceUid?: string | null }>();
 
 	let content = $state<ReturnType<typeof TrackPlaylistContent> | null>(null);
 
@@ -25,7 +25,7 @@
 	<ContextMenu.Group>
 		<ContextMenu.Item onSelect={() => copySelectedNameToClipboard(track)}>Copy Track & Artist Name</ContextMenu.Item>
 		<ContextMenu.Item
-			onSelect={() => addTrackToQueue(track)}
+			onSelect={() => addTrackToQueue(track, sourceUid)}
 			class={track.path.match(/^[a-z]+-[0-9a-f-]{36}$/) ? 'opacity-50 pointer-events-none' : ''}>
 			Add to Queue
 		</ContextMenu.Item>

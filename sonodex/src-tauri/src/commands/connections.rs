@@ -299,6 +299,7 @@ pub fn import_spotify_history_cmd(
 				track_uid,
 				artist_uid,
 				album_uid,
+				source_uid: None,
 				duration_played: ms_played,
 				did_seek: false,
 				did_pause: false,

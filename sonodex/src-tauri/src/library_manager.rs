@@ -272,7 +272,7 @@ fn copy_tracks(
 	let mut stmt = source.prepare(
 		"SELECT uid, path, last_modified, title, artists, album_artist, albums, genres, year,
 		rating, tags, duration_ms, bpm, key, credits, label, artwork_blob, artwork_path,
-		artwork_thumb, user_options, format, bitrate, remote_path, remote_data, track_data
+		artwork_thumb, user_options, format, bitrate, remote_path, remote_data, track_data, date_added
 		FROM tracks",
 	)?;
 
@@ -304,6 +304,7 @@ fn copy_tracks(
 				row.get::<_, Option<String>>(22)?,
 				row.get::<_, Option<String>>(23)?,
 				row.get::<_, Option<String>>(24)?,
+				row.get::<_, Option<i64>>(25)?,
 			))
 		})?
 		.filter_map(|r| r.ok())
@@ -318,9 +319,9 @@ fn copy_tracks(
 				uid, path, last_modified, title, artists, album_artist, albums, genres, year,
 				rating, tags, duration_ms, bpm, key, credits, label, artwork_blob, artwork_path,
 				artwork_thumb, user_options, format, bitrate, remote_path, remote_data, track_data,
-				source_lib_uid
+				source_lib_uid, date_added
 			) VALUES (
-				?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26
+				?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,COALESCE(?27, 0)
 			)
 			ON CONFLICT(uid) DO UPDATE SET
 				path          = excluded.path,
@@ -347,11 +348,12 @@ fn copy_tracks(
 				remote_path   = excluded.remote_path,
 				remote_data   = excluded.remote_data,
 				track_data    = excluded.track_data,
-				source_lib_uid = excluded.source_lib_uid",
+				source_lib_uid = excluded.source_lib_uid,
+				date_added    = excluded.date_added",
 			params![
 				row.0, row.1, row.2, row.3, row.4, row.5, row.6, row.7, row.8,
 				row.9, row.10, row.11, row.12, row.13, row.14, row.15, row.16, row.17,
-				row.18, row.19, row.20, row.21, row.22, row.23, row.24, lib_uid,
+				row.18, row.19, row.20, row.21, row.22, row.23, row.24, lib_uid, row.25,
 			],
 		)?;
 	}

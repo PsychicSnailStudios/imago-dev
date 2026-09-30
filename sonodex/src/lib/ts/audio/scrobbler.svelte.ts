@@ -43,6 +43,7 @@ export async function scrobbleStart(
 			trackArtist: artistName,
 			trackAlbum: firstAlbum?.name || null,
 			albumUid: firstAlbum?.uid || null,
+			sourceUid: track.play_source_uid || null,
 		});
 	} catch (e) {
 		console.error("scrobbleStart failed", e);

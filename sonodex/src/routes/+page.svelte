@@ -2,6 +2,7 @@
 	import { onMount } from "svelte";
 	import { invoke } from "@tauri-apps/api/core";
 	import { listen } from "@tauri-apps/api/event";
+	import { setExplorePlaylists } from "$ts/config/explore.svelte";
 
 	import * as Resizable from "$shadcn/resizable/index.js";
 
@@ -66,6 +67,7 @@
 			loadPlayerState();
 			if (uid) loadSessionState(uid);
 			await loadLibrary();
+			setExplorePlaylists();
 		}
 
 		await listen("profile:ready", async () => {
@@ -75,6 +77,7 @@
 			loadPlayerState();
 			if (uid) loadSessionState(uid);
 			await loadLibrary();
+			setExplorePlaylists();
 		});
 
 		window.addEventListener("keydown", keydown);

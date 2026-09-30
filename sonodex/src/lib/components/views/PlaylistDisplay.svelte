@@ -159,9 +159,9 @@
 			<div class="flex gap-2 justify-between items-center flex-wrap p-2 rounded-md"
 				  style="background: {color};">
 				<div>
-					<Button variant="default" disabled={allGhosts} onclick={() => queueTracksByObject(tracks, true)}>{ tracks.length === 1 ? "Play" : "Play All"}</Button>
+					<Button variant="default" disabled={allGhosts} onclick={() => queueTracksByObject(tracks, true, false, playlist.uid)}>{ tracks.length === 1 ? "Play" : "Play All"}</Button>
 					{#if tracks.length > 1}
-					<Button variant="outline" disabled={allGhosts} onclick={() => queueTracksByObject(tracks, true, true)}>Shuffle</Button>
+					<Button variant="outline" disabled={allGhosts} onclick={() => queueTracksByObject(tracks, true, true, playlist.uid)}>Shuffle</Button>
 					{/if}
 				</div>
 				

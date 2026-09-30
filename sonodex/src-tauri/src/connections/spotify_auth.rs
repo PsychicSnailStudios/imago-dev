@@ -560,6 +560,7 @@ pub async fn spotify_import_playlist(
 				remote_data: None,
 				track_data: None,
 				artwork_thumb: None,
+				date_added: None,
 			};
 
 			match upsert_track(&lib_conn, &stub) {

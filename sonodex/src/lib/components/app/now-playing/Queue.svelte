@@ -103,7 +103,7 @@
 			const tracks = resolveUidsToTracks(uids);
 			if (tracks.length > 0) {
 				const afterIndex = dragOverPosition === "above" ? dropIndex - 1 : dropIndex;
-				insertIntoQueue(tracks, afterIndex);
+				insertIntoQueue(tracks, afterIndex, dragState.payload?.sourceUid ?? null);
 			}
 		}
 
@@ -123,7 +123,7 @@
 		} else {
 			const uids = getDropUids(e);
 			const tracks = resolveUidsToTracks(uids);
-			if (tracks.length > 0) insertIntoQueue(tracks);
+			if (tracks.length > 0) insertIntoQueue(tracks, undefined, dragState.payload?.sourceUid ?? null);
 		}
 
 		dragOverAppend = false;

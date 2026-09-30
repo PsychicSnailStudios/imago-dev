@@ -162,7 +162,8 @@ pub fn init_library_db(conn: &Connection) -> Result<()> {
 			bitrate INTEGER,
 			remote_path TEXT,
 			remote_data TEXT,
-			track_data TEXT
+			track_data TEXT,
+			date_added INTEGER NOT NULL DEFAULT (strftime('%s','now'))
 		);
 
 		CREATE TABLE IF NOT EXISTS albums (
@@ -257,6 +258,7 @@ pub fn init_merged_db(conn: &Connection) -> Result<()> {
 			remote_path TEXT,
 			remote_data TEXT,
 			track_data TEXT,
+			date_added INTEGER NOT NULL DEFAULT 0,
 			source_lib_uid TEXT NOT NULL DEFAULT '',
 			is_local_override INTEGER NOT NULL DEFAULT 0
 		);
@@ -384,7 +386,8 @@ pub fn init_lib_db(conn: &Connection) -> Result<()> {
 			bitrate INTEGER,
 			remote_path TEXT,
 			remote_data TEXT,
-			track_data TEXT
+			track_data TEXT,
+			date_added INTEGER NOT NULL DEFAULT (strftime('%s','now'))
 		);
 
 		CREATE TABLE IF NOT EXISTS albums (

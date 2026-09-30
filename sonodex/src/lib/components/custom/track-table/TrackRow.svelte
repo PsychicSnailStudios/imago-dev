@@ -41,6 +41,7 @@
 		showLabel,
 		showOptions,
 		playlistUid = null,
+		sourceUid = null,
 	} = $props<{
 		track: Track;
 		orderedUids: string[];
@@ -60,6 +61,7 @@
 		showLabel: boolean;
 		showOptions: boolean;
 		playlistUid?: string | null;
+		sourceUid?: string | null;
 	}>();
 
 	// VARIABLES
@@ -80,7 +82,7 @@
 
 	function handleRowDblClick(e: MouseEvent) {
 		if ((e.target as HTMLElement).closest("button")) return;
-		playTrackByUid(track.uid);
+		playTrackByUid(track.uid, sourceUid);
 	}
 
 	function handleDragStart(e: DragEvent) {
@@ -93,7 +95,7 @@
 			uids = [track.uid];
 		}
 
-		startDrag({ type: "tracks", uids, sourcePlaylistUid: playlistUid });
+		startDrag({ type: "tracks", uids, sourcePlaylistUid: playlistUid, sourceUid });
 		e.dataTransfer.effectAllowed = "move";
 		e.dataTransfer.setData("text/plain", uids.join(","));
 	}
@@ -126,7 +128,7 @@
 	style="grid-template-columns: {gridTemplate}; height: {compact ? '28px' : '56px'};"
 	onclick={handleRowClick}
 	ondblclick={handleRowDblClick}
-	onkeydown={(e) => { if (e.key === 'Enter') playTrackByUid(track.uid); }}
+	onkeydown={(e) => { if (e.key === 'Enter') playTrackByUid(track.uid, sourceUid); }}
 	draggable="true"
 	ondragstart={handleDragStart}
 	ondragend={handleDragEnd}
@@ -149,7 +151,7 @@
 						<Play />
 					</Button>
 				{:else}
-					<Button variant="ghost" size="icon" onclick={() => playTrackByUid(track.uid)}>
+					<Button variant="ghost" size="icon" onclick={() => playTrackByUid(track.uid, sourceUid)}>
 						<Play />
 					</Button>
 				{/if}
@@ -159,7 +161,7 @@
 
 	{#if !compact && showArtwork}
 		<div class="group relative w-full">
-			<ArtworkDisplay entity={track.uid} size={30} />
+			<ArtworkDisplay entity={track} size={30} />
 			<div class="cursor-pointer absolute top-0 inset-0 -left-1 w-full h-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
 				{#if player.isPlaying && player.track?.uid === track.uid}
 					<Button variant="ghost" size="icon" onclick={() => togglePlay()}>
@@ -170,7 +172,7 @@
 						<Play />
 					</Button>
 				{:else}
-					<Button variant="ghost" size="icon" onclick={() => playTrackByUid(track.uid)}>
+					<Button variant="ghost" size="icon" onclick={() => playTrackByUid(track.uid, sourceUid)}>
 						<Play />
 					</Button>
 				{/if}
@@ -232,6 +234,6 @@
 	{/if}
 
 	{#if showOptions}
-			<TrackTableEditButton {track} />
+			<TrackTableEditButton {track} {sourceUid} />
 	{/if}
 </div>

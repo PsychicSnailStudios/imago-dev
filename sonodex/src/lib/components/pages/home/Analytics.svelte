@@ -31,6 +31,7 @@
 		skipped: boolean | null;
 		offline: boolean | null;
 		playing_local: boolean | null;
+		source_uid: string | null;
 	};
 
 	type TopTrack = { track: Track; plays: number; ms: number };

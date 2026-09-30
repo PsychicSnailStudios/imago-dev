@@ -50,6 +50,9 @@ declare module '$env/static/private' {
 	export const COMPUTERNAME: string;
 	export const ComSpec: string;
 	export const DriverData: string;
+	export const EFC_12596: string;
+	export const FPS_BROWSER_APP_PROFILE_STRING: string;
+	export const FPS_BROWSER_USER_PROFILE_STRING: string;
 	export const GIT_ASKPASS: string;
 	export const HOMEDRIVE: string;
 	export const HOMEPATH: string;
@@ -93,6 +96,7 @@ declare module '$env/static/private' {
 	export const PUBLIC: string;
 	export const PWD: string;
 	export const RegionCode: string;
+	export const SESSIONNAME: string;
 	export const SystemDrive: string;
 	export const SystemRoot: string;
 	export const TAURI_CLI_VERBOSITY: string;
@@ -217,6 +221,9 @@ declare module '$env/dynamic/private' {
 		COMPUTERNAME: string;
 		ComSpec: string;
 		DriverData: string;
+		EFC_12596: string;
+		FPS_BROWSER_APP_PROFILE_STRING: string;
+		FPS_BROWSER_USER_PROFILE_STRING: string;
 		GIT_ASKPASS: string;
 		HOMEDRIVE: string;
 		HOMEPATH: string;
@@ -260,6 +267,7 @@ declare module '$env/dynamic/private' {
 		PUBLIC: string;
 		PWD: string;
 		RegionCode: string;
+		SESSIONNAME: string;
 		SystemDrive: string;
 		SystemRoot: string;
 		TAURI_CLI_VERBOSITY: string;

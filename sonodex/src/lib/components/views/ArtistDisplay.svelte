@@ -11,7 +11,7 @@
 	import ArtworkDisplay from "$lib/components/custom/ArtworkDisplay.svelte";
 	import AudioCard from "$lib/components/custom/cards/AudioCard.svelte";
 	import NavButtons from "$lib/components/custom/NavButtons.svelte";
-	import ArtistTopTracks from "$lib/components/pages/profile/ArtistTopTracks.svelte";
+	import ArtistTopTracks from "$lib/components/pages/home/ArtistTopTracks.svelte";
 	import TagList from "$lib/components/custom/tags/TagList.svelte";
 
 	import { selection } from "$ts/store/session.svelte";

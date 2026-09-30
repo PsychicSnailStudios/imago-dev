@@ -29,6 +29,7 @@ pub struct Track {
 	pub remote_path: Option<String>,
 	pub remote_data: Option<String>,
 	pub track_data: Option<String>,
+	pub date_added: Option<i64>,
 }
 
 // ─── JSON field helpers ─────────────────────────────────────────────────────
@@ -270,7 +271,7 @@ pub fn delete_track_by_uid(conn: &Connection, uid: &str) -> Result<()> {
 
 pub fn get_all_tracks(conn: &Connection) -> Result<Vec<Track>> {
 	let mut stmt = conn.prepare(
-		"SELECT id, uid, path, last_modified, title, artists, album_artist, albums, genres, year, rating, tags, duration_ms, bpm, key, credits, label, format, bitrate, artwork_path, artwork_thumb, user_options, remote_path, remote_data, track_data
+		"SELECT id, uid, path, last_modified, title, artists, album_artist, albums, genres, year, rating, tags, duration_ms, bpm, key, credits, label, format, bitrate, artwork_path, artwork_thumb, user_options, remote_path, remote_data, track_data, date_added
 		 FROM tracks ORDER BY album_artist, albums, title"
 	)?;
 	let tracks = stmt
@@ -302,6 +303,7 @@ pub fn get_all_tracks(conn: &Connection) -> Result<Vec<Track>> {
 				remote_path: row.get(22)?,
 				remote_data: row.get(23)?,
 				track_data: row.get(24)?,
+				date_added: row.get(25)?,
 			})
 		})?
 		.collect::<Result<Vec<_>>>()?;
@@ -310,7 +312,7 @@ pub fn get_all_tracks(conn: &Connection) -> Result<Vec<Track>> {
 
 pub fn get_track_by_uid(conn: &Connection, uid: &str) -> Result<Option<Track>> {
 	let mut stmt = conn.prepare(
-		"SELECT id, uid, path, last_modified, title, artists, album_artist, albums, genres, year, rating, tags, duration_ms, bpm, key, credits, label, format, bitrate, artwork_path, artwork_thumb, user_options, remote_path, remote_data, track_data
+		"SELECT id, uid, path, last_modified, title, artists, album_artist, albums, genres, year, rating, tags, duration_ms, bpm, key, credits, label, format, bitrate, artwork_path, artwork_thumb, user_options, remote_path, remote_data, track_data, date_added
 		 FROM tracks WHERE uid = ?1"
 	)?;
 	let mut rows = stmt.query(params![uid])?;
@@ -342,6 +344,7 @@ pub fn get_track_by_uid(conn: &Connection, uid: &str) -> Result<Option<Track>> {
 			remote_path: row.get(22)?,
 			remote_data: row.get(23)?,
 			track_data: row.get(24)?,
+			date_added: row.get(25)?,
 		}))
 	} else {
 		Ok(None)
@@ -370,9 +373,9 @@ pub fn get_track_artwork_by_uid(conn: &Connection, uid: &str) -> Result<Option<V
 
 pub fn find_duplicates(conn: &Connection) -> Result<Vec<DuplicateGroup>> {
 	let mut stmt = conn.prepare(
-		"SELECT id, uid, path, last_modified, title, artists, album_artist, albums, genres, year, rating, tags, duration_ms, bpm, key, credits, label, format, bitrate, artwork_path, artwork_thumb, user_options, remote_path, remote_data, track_data
+		"SELECT id, uid, path, last_modified, title, artists, album_artist, albums, genres, year, rating, tags, duration_ms, bpm, key, credits, label, format, bitrate, artwork_path, artwork_thumb, user_options, remote_path, remote_data, track_data, date_added
 		 FROM (
-			 SELECT a.id, a.uid, a.path, a.last_modified, a.title, a.artists, a.album_artist, a.albums, a.genres, a.year, a.rating, a.tags, a.duration_ms, a.bpm, a.key, a.credits, a.label, a.format, a.bitrate, a.artwork_path, a.artwork_thumb, a.user_options, a.remote_path, a.remote_data, a.track_data
+			 SELECT a.id, a.uid, a.path, a.last_modified, a.title, a.artists, a.album_artist, a.albums, a.genres, a.year, a.rating, a.tags, a.duration_ms, a.bpm, a.key, a.credits, a.label, a.format, a.bitrate, a.artwork_path, a.artwork_thumb, a.user_options, a.remote_path, a.remote_data, a.track_data, a.date_added
 			 FROM tracks a
 			 INNER JOIN tracks b ON (
 				 a.id < b.id
@@ -381,7 +384,7 @@ pub fn find_duplicates(conn: &Connection) -> Result<Vec<DuplicateGroup>> {
 				 AND ABS(COALESCE(a.duration_ms, 0) - COALESCE(b.duration_ms, 0)) <= 1000
 			 )
 			 UNION
-			 SELECT b.id, b.uid, b.path, b.last_modified, b.title, b.artists, b.album_artist, b.albums, b.genres, b.year, b.rating, b.tags, b.duration_ms, b.bpm, b.key, b.credits, b.label, b.format, b.bitrate, b.artwork_path, b.artwork_thumb, b.user_options, b.remote_path, b.remote_data, b.track_data
+			 SELECT b.id, b.uid, b.path, b.last_modified, b.title, b.artists, b.album_artist, b.albums, b.genres, b.year, b.rating, b.tags, b.duration_ms, b.bpm, b.key, b.credits, b.label, b.format, b.bitrate, b.artwork_path, b.artwork_thumb, b.user_options, b.remote_path, b.remote_data, b.track_data, b.date_added
 			 FROM tracks a
 			 INNER JOIN tracks b ON (
 				 a.id < b.id
@@ -422,6 +425,7 @@ pub fn find_duplicates(conn: &Connection) -> Result<Vec<DuplicateGroup>> {
 				remote_path: row.get(22)?,
 				remote_data: row.get(23)?,
 				track_data: row.get(24)?,
+				date_added: row.get(25)?,
 			})
 		})?
 		.collect::<Result<Vec<_>>>()?;

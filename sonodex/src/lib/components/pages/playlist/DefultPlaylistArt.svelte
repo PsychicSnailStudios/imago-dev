@@ -11,32 +11,38 @@
    import type { Track } from "$ts/util/types";
 
 	// PROPS
-	let { tracks } = $props<{ tracks: Track[] }>();
+	let { tracks } = $props<{ tracks: Track[] | Promise<Track[]> }>();
 
 	// VARIABLES
 	let colorA = $state("var(--muted)")
 	let colorB = $state("var(--muted)")
 
-
 	// APP FUNCTIONS
 	$effect(() => {
 		colorA = "var(--muted)"
 		colorB = "var(--muted)"
-		
+
 		if (!tracks) return;
-		if (tracks.length === 0) return;
 
-		const uidA = tracks[0]?.uid;
-		const uidB = tracks[tracks.length - 1]?.uid;
-		
-		if (!uidA || !uidB) return;
+		let cancelled = false;
 
-		invoke("get_track_artwork", { uid: uidA }).then((trackBytes) => {
-			if (trackBytes) getArtworkColor(trackBytes as number[], 0.9).then((c) => colorA = c);
+		Promise.resolve(tracks).then((resolved) => {
+			if (cancelled || !resolved || resolved.length === 0) return;
+
+			const uidA = resolved[0]?.uid;
+			const uidB = resolved[resolved.length - 1]?.uid;
+
+			if (!uidA || !uidB) return;
+
+			invoke("get_track_artwork", { uid: uidA }).then((trackBytes) => {
+				if (!cancelled && trackBytes) getArtworkColor(trackBytes as number[], 0.9).then((c) => colorA = c);
+			});
+			invoke("get_track_artwork", { uid: uidB }).then((trackBytes) => {
+				if (!cancelled && trackBytes) getArtworkColor(trackBytes as number[], 0.9).then((c) => colorB = c);
+			});
 		});
-		invoke("get_track_artwork", { uid: uidB }).then((trackBytes) => {
-			if (trackBytes) getArtworkColor(trackBytes as number[], 0.9).then((c) => colorB = c);
-		});
+
+		return () => { cancelled = true; };
 	});
 
 </script>

@@ -33,6 +33,7 @@ pub fn log_scrobble(
 	track_artist: Option<String>,
 	track_album: Option<String>,
 	album_uid: Option<String>,
+	source_uid: Option<String>,
 ) -> Result<String, String> {
 	let uid = state.get_uid();
 	let conn = open_analytics_conn(&uid).map_err(|e| e.to_string())?;
@@ -58,6 +59,7 @@ pub fn log_scrobble(
 		track_artist,
 		track_album,
 		album_uid,
+		source_uid,
 	};
 	analytics_manager::log_scrobble(&conn, &scrobble).map_err(|e| e.to_string())?;
 	Ok(scrobble_uid)

@@ -310,14 +310,22 @@ export function savePlayerState() {
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
-export async function playTrackByUid(uid: string) {
-	const track = await getTrack(uid);
-	if (!track) return;
-	playTrack(track);
+function withSource(track: Track, sourceUid: string | null | undefined): Track {
+	return { ...track, play_source_uid: sourceUid ?? null };
 }
 
-export function playTrackByObject(track: Track) {
-	playTrack(track);
+function withSourceAll(tracks: Track[], sourceUid: string | null | undefined): Track[] {
+	return tracks.map(t => withSource(t, sourceUid));
+}
+
+export async function playTrackByUid(uid: string, sourceUid: string | null = null) {
+	const track = await getTrack(uid);
+	if (!track) return;
+	playTrack(withSource(track, sourceUid));
+}
+
+export function playTrackByObject(track: Track, sourceUid: string | null = null) {
+	playTrack(withSource(track, sourceUid));
 }
 
 export function clearQueue() {
@@ -338,14 +346,15 @@ export function getPlayedTracks(): Track[] {
 	return playedTracks;
 }
 
-export function addTrackToQueue(track: Track) {
-	queuedTracks.push(track);
+export function addTrackToQueue(track: Track, sourceUid: string | null = null) {
+	queuedTracks.push(withSource(track, sourceUid));
 }
 
-export function queueTracksByObject(tracks: Track[], play = false, shuffle = false) {
+export function queueTracksByObject(tracksIn: Track[], play = false, shuffle = false, sourceUid: string | null = null) {
 	if (play) clearQueue();
 	if (shuffle && player.shuffleType === 0) player.shuffleType = 1;
 
+	const tracks = withSourceAll(tracksIn, sourceUid);
 	setLastQueuedSet(tracks);
 	const ordered = applyShuffleToList(tracks);
 	ordered.forEach(t => queuedTracks.push(t));
@@ -353,11 +362,11 @@ export function queueTracksByObject(tracks: Track[], play = false, shuffle = fal
 	if (play) startPlayingQueue();
 }
 
-export async function queueTracksByUid(uids: string[], play = false, shuffle = false) {
+export async function queueTracksByUid(uids: string[], play = false, shuffle = false, sourceUid: string | null = null) {
 	if (play) clearQueue();
 	if (shuffle && player.shuffleType === 0) player.shuffleType = 1;
 
-	const tracks: Track[] = await getTrackArray(uids);
+	const tracks: Track[] = withSourceAll(await getTrackArray(uids), sourceUid);
 
 	setLastQueuedSet(tracks);
 	const ordered = applyShuffleToList(tracks);
@@ -370,7 +379,7 @@ export async function queueTracksFromUid(uid: string, play = false, shuffle = fa
 	if (play) clearQueue();
 	if (shuffle && player.shuffleType === 0) player.shuffleType = 1;
 
-	const tracks: Track[] = await getTrackArrayFromUID(uid);
+	const tracks: Track[] = withSourceAll(await getTrackArrayFromUID(uid), uid);
 
 	setLastQueuedSet(tracks);
 	const ordered = applyShuffleToList(tracks);
@@ -412,7 +421,8 @@ export function removeFromQueue(displayIndex: number) {
 	queuedTracks.splice(abs, 1);
 }
 
-export function insertIntoQueue(tracks: Track[], afterDisplayIndex?: number) {
+export function insertIntoQueue(tracksIn: Track[], afterDisplayIndex?: number, sourceUid: string | null = null) {
+	const tracks = tracksIn.map(t => t.play_source_uid !== undefined ? t : withSource(t, sourceUid));
 	const offset = getQueueIndex() + 1;
 	if (afterDisplayIndex === undefined) {
 		tracks.forEach(t => queuedTracks.push(t));

@@ -20,7 +20,7 @@ pub fn search_tracks(conn: &Connection, query: &str) -> Result<Vec<Track>> {
             id, uid, path, last_modified, title, artists, album_artist, albums,
             genres, year, rating, tags, duration_ms, bpm, key, credits, label,
             format, bitrate, artwork_path, artwork_thumb, user_options,
-            remote_path, remote_data, track_data,
+            remote_path, remote_data, track_data, date_added,
             -- Score: lower = better match priority (we ORDER ASC)
             CASE
                 WHEN LOWER(COALESCE(title, '')) LIKE ?1 THEN 0
@@ -71,6 +71,7 @@ pub fn search_tracks(conn: &Connection, query: &str) -> Result<Vec<Track>> {
                 remote_path: row.get(22)?,
                 remote_data: row.get(23)?,
                 track_data: row.get(24)?,
+                date_added: row.get(25)?,
             })
         })?
         .collect::<Result<Vec<_>>>()?;
@@ -210,7 +211,7 @@ pub fn get_tracks_by_uids(conn: &Connection, uids: &[String]) -> Result<Vec<Trac
         "SELECT id, uid, path, last_modified, title, artists, album_artist, albums,
                 genres, year, rating, tags, duration_ms, bpm, key, credits, label,
                 format, bitrate, artwork_path, artwork_thumb, user_options,
-                remote_path, remote_data, track_data
+                remote_path, remote_data, track_data, date_added
          FROM tracks
          WHERE uid IN ({})",
         placeholders
@@ -247,6 +248,7 @@ pub fn get_tracks_by_uids(conn: &Connection, uids: &[String]) -> Result<Vec<Trac
                 remote_path: row.get(22)?,
                 remote_data: row.get(23)?,
                 track_data: row.get(24)?,
+                date_added: row.get(25)?,
             })
         })?
         .collect::<Result<Vec<_>>>()?;

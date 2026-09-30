@@ -23,7 +23,7 @@
 			playTrackByObject(entity);
 		} else {
 			const tracks = await getTrackArrayFromUID(entity.uid);
-			queueTracksByObject(tracks, true);
+			queueTracksByObject(tracks, true, false, entity.uid);
 		}
 	}
 </script>

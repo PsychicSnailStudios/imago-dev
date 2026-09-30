@@ -933,6 +933,7 @@ pub fn read_track_with_settings(
 			"bitrate": bitrate,
 			"is_ghost": null,
 		})).ok(),
+		date_added: None,
 	})
 }
 

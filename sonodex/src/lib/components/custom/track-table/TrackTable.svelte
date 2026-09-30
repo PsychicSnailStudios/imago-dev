@@ -394,6 +394,7 @@
 									showLabel={v.label}
 									showOptions={v.options}
 									{playlistUid}
+									sourceUid={playlistUid ?? albumUid}
 								/>
 
 								{#if dragOverIndex === i && dragOverPosition === "below"}
@@ -406,7 +407,7 @@
 			</ContextMenu.Trigger>
 			{@const ctxTrack = contextMenuTrackUid ? sortedTracks.find(t => t.uid === contextMenuTrackUid) : null}
 			{#if ctxTrack}
-				<TrackContext track={ctxTrack} />
+				<TrackContext track={ctxTrack} sourceUid={playlistUid ?? albumUid} />
 			{/if}
 		</ContextMenu.Root>
 	{:else}
@@ -455,6 +456,7 @@
 											showLabel={v.label}
 											showOptions={v.options}
 											{playlistUid}
+											sourceUid={playlistUid ?? albumUid}
 										/>
 
 										{#if dragOverIndex === i && dragOverPosition === "below"}
@@ -469,7 +471,7 @@
 			</ContextMenu.Trigger>
 			{@const ctxTrack = contextMenuTrackUid ? sortedTracks.find(t => t.uid === contextMenuTrackUid) : null}
 			{#if ctxTrack}
-				<TrackContext track={ctxTrack} />
+				<TrackContext track={ctxTrack} sourceUid={playlistUid ?? albumUid} />
 			{/if}
 		</ContextMenu.Root>
 	{/if}

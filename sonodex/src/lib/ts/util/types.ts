@@ -46,6 +46,8 @@ export type Track = {
 	artwork_thumb: string | null;
 	source_lib_uid: string | null;
 	is_local_override: boolean | null;
+	date_added: number | null;
+	play_source_uid?: string | null;
 };
 
 export type Album = {

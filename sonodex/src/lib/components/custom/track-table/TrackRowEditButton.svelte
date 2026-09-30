@@ -9,7 +9,7 @@
 	import { copySelectedNameToClipboard } from "$ts/store/trackSelection.svelte";
 	import type { Track } from "$ts/util/types";
 
-	let { track } = $props<{ track: Track }>()
+	let { track, sourceUid = null } = $props<{ track: Track; sourceUid?: string | null }>()
 
 	let content = $state<ReturnType<typeof TrackPlaylistContent> | null>(null);
 </script>
@@ -26,7 +26,7 @@
 	<DropdownMenu.Content>
 		<DropdownMenu.Group>
 			<DropdownMenu.Item onSelect={() => copySelectedNameToClipboard(track)}>Copy Track & Artist Name</DropdownMenu.Item>
-			<DropdownMenu.Item onSelect={() => addTrackToQueue(track)}>Add to Queue</DropdownMenu.Item>
+			<DropdownMenu.Item onSelect={() => addTrackToQueue(track, sourceUid)}>Add to Queue</DropdownMenu.Item>
 		</DropdownMenu.Group>
 
 		<DropdownMenu.Separator />
