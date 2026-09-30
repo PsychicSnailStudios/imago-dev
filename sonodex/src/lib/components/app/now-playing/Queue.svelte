@@ -15,6 +15,7 @@
 		removeFromQueue,
 	} from "$ts/audio/audioManager.svelte";
 	import { player } from "$ts/audio/audioPlayer.svelte";
+	import { getTrackArray } from "$ts/store/library.svelte";
 	import { dragState, endDrag } from "$ts/store/drag.svelte";
 	import { clearQueueSelection, queueSelection } from "$ts/store/queueSelection.svelte";
 
@@ -22,14 +23,14 @@
 	let upcomingTracks = $derived(getQueuedTracks());
 	let upcomingUids = $derived(upcomingTracks.map(t => t.uid));
 
-	// A uid→track map built from whatever the drag payload carries.
-	// The drag system sets dragState.payload.tracks when tracks are dragged from the library.
-	// For queue reorders the tracks are already in upcomingTracks.
-	function resolveUidsToTracks(uids: string[]) {
-		// Build lookup from queue + drag payload
+	async function resolveUidsToTracks(uids: string[], payloadTracks: any[] = []) {
 		const lookup = new Map(upcomingTracks.map(t => [t.uid, t]));
-		const payloadTracks = dragState.payload?.tracks ?? [];
 		for (const t of payloadTracks) lookup.set(t.uid, t);
+		const missing = uids.filter(uid => !lookup.has(uid));
+		if (missing.length > 0) {
+			const fetched = await getTrackArray(missing);
+			for (const t of fetched) lookup.set(t.uid, t);
+		}
 		return uids.map(uid => lookup.get(uid)).filter((t): t is NonNullable<typeof t> => t !== undefined);
 	}
 
@@ -90,45 +91,53 @@
 		dragOverAppend = false;
 	}
 
-	function handleRowDrop(e: DragEvent, dropIndex: number) {
+	async function handleRowDrop(e: DragEvent, dropIndex: number) {
 		e.preventDefault();
 		e.stopPropagation();
 
-		if (isQueueDrag()) {
-			const fromIndices = dragState.payload!.sourceQueueIndices!;
-			const toDisplayIndex = dragOverPosition === "above" ? dropIndex : dropIndex + 1;
-			reorderQueue(fromIndices, toDisplayIndex);
-		} else {
-			const uids = getDropUids(e);
-			const tracks = resolveUidsToTracks(uids);
-			if (tracks.length > 0) {
-				const afterIndex = dragOverPosition === "above" ? dropIndex - 1 : dropIndex;
-				insertIntoQueue(tracks, afterIndex, dragState.payload?.sourceUid ?? null);
-			}
-		}
+		const queueDrag = isQueueDrag();
+		const fromIndices = dragState.payload?.sourceQueueIndices ?? [];
+		const payloadTracks = dragState.payload?.tracks ?? [];
+		const sourceUid = dragState.payload?.sourceUid ?? null;
+		const position = dragOverPosition;
+		const uids = getDropUids(e);
 
 		dragOverIndex = null;
 		dragOverAppend = false;
 		clearQueueSelection();
 		endDrag();
+
+		if (queueDrag) {
+			reorderQueue(fromIndices, position === "above" ? dropIndex : dropIndex + 1);
+		} else {
+			const tracks = await resolveUidsToTracks(uids, payloadTracks);
+			if (tracks.length > 0) {
+				insertIntoQueue(tracks, position === "above" ? dropIndex - 1 : dropIndex, sourceUid);
+			}
+		}
 	}
 
-	function handleScrollAreaDrop(e: DragEvent) {
+	async function handleScrollAreaDrop(e: DragEvent) {
 		e.preventDefault();
 		if (dragOverIndex !== null) return;
 
-		if (isQueueDrag()) {
-			const fromIndices = dragState.payload!.sourceQueueIndices!;
-			reorderQueue(fromIndices, upcomingTracks.length - 1);
-		} else {
-			const uids = getDropUids(e);
-			const tracks = resolveUidsToTracks(uids);
-			if (tracks.length > 0) insertIntoQueue(tracks, undefined, dragState.payload?.sourceUid ?? null);
-		}
+		const queueDrag = isQueueDrag();
+		const fromIndices = dragState.payload?.sourceQueueIndices ?? [];
+		const payloadTracks = dragState.payload?.tracks ?? [];
+		const sourceUid = dragState.payload?.sourceUid ?? null;
+		const lastIndex = upcomingTracks.length - 1;
+		const uids = getDropUids(e);
 
 		dragOverAppend = false;
 		clearQueueSelection();
 		endDrag();
+
+		if (queueDrag) {
+			reorderQueue(fromIndices, lastIndex);
+		} else {
+			const tracks = await resolveUidsToTracks(uids, payloadTracks);
+			if (tracks.length > 0) insertIntoQueue(tracks, undefined, sourceUid);
+		}
 	}
 
 	function getDropUids(e: DragEvent): string[] {
@@ -147,16 +156,17 @@
 		{/if}
 	</div>
 
+	
 	{#if upcomingTracks.length > 0}
 	<p class="text-sm text-foreground">Next up:</p>
-
-	<div class="flex justify-between">
-		<p class="text-xs text-muted-foreground">{formatTotalRemainingTime()} Remaining</p>
-		<button class="text-xs text-muted-foreground cursor-pointer hover:underline" onclick={clearQueue}>Clear</button>
-	</div>
+		<div class="flex justify-between">
+			<p class="text-xs text-muted-foreground">{formatTotalRemainingTime()} Remaining</p>
+			<button class="text-xs text-muted-foreground cursor-pointer hover:underline" onclick={clearQueue}>Clear</button>
+		</div>
+	{/if}
 
 	<ScrollArea
-		class="min-h-0 min-w-0 h-[254px]"
+		class="min-h-0 min-w-0 rounded-md {upcomingTracks.length > 0 ? 'h-[254px]' : 'h-[120px]'} {upcomingTracks.length === 0 && dragState.active ? 'border-2 border-dashed' : ''}"
 		ondragover={handleScrollAreaDragOver}
 		ondragleave={handleScrollAreaDragLeave}
 		ondrop={handleScrollAreaDrop}
@@ -191,7 +201,10 @@
 			{#if dragOverAppend}
 				<div class="h-0.5 bg-primary mx-2 rounded pointer-events-none"></div>
 			{/if}
+
+			{#if upcomingTracks.length === 0 && dragState.active}
+				<p class="text-xs text-muted-foreground text-center pt-10 pointer-events-none">Drop tracks here</p>
+			{/if}
 		</div>
 	</ScrollArea>
-	{/if}
 </Tabs.Content>

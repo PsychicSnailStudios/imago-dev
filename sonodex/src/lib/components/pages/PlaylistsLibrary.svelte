@@ -50,6 +50,7 @@
 	let compact   = $state<boolean>(_saved.compact);
 
 	let playlistHoverTimer: ReturnType<typeof setTimeout> | null = null;
+	let playlistHoverUid: string | null = null;
 
 	let search          = $state("");
 	let expandedFolders = $state<Set<string>>(new Set());
@@ -183,13 +184,30 @@
 
 	function clearGridDrop() { gridDropTarget = null; }
 
+	function cancelPlaylistHover() {
+		if (playlistHoverTimer !== null) clearTimeout(playlistHoverTimer);
+		playlistHoverTimer = null;
+		playlistHoverUid = null;
+	}
+
+	function schedulePlaylistHover(uid: string) {
+		if (playlistHoverUid === uid) return;
+		cancelPlaylistHover();
+		playlistHoverUid = uid;
+		playlistHoverTimer = setTimeout(() => {
+			playlistHoverTimer = null;
+			setHoveredPlaylist(uid);
+			setSelection(uid, "playlist");
+		}, 600);
+	}
+
 	function handleDragEnd() {
 		draggingPlaylistUid = null;
 		draggingFolderPath = null;
 		gridDropTarget = null;
 		compactDrop = null;
 		compactFolderDrop = null;
-		if (playlistHoverTimer !== null) { clearTimeout(playlistHoverTimer); playlistHoverTimer = null; }
+		cancelPlaylistHover();
 		resetFolderTimers();
 		endDrag();
 	}
@@ -205,6 +223,7 @@
 	}
 
 	function onGridFolderDragOver(e: DragEvent, fi: number, folderPath: string) {
+		e.preventDefault();
 		if (isDraggingFolderType(e)) {
 			gridDropTarget = { kind: "folder", index: fi, side: getSide(e) };
 		} else {
@@ -219,12 +238,8 @@
 			if (gridDropTarget?.kind === "folder") {
 				await doFolderReorder(draggingFolderPath, fi, gridDropTarget.side, playlists, currentPath, sortField, sortDir);
 			}
-		} else if (dragState.payload?.sourcePlaylistUid) {
-			await movePlaylists([dragState.payload.sourcePlaylistUid], folderPath);
-		} else {
-			const raw = e.dataTransfer?.getData("text/plain") ?? "";
-			const uids = raw.split(",").map(u => u.trim()).filter(Boolean);
-			if (uids.length > 0) await addTracksToPlaylist(folderPath, uids);
+		} else if (draggingPlaylistUid) {
+			await movePlaylists([draggingPlaylistUid], folderPath);
 		}
 		clearGridDrop();
 		handleDragEnd();
@@ -232,12 +247,12 @@
 
 	function onGridPlaylistDragOver(e: DragEvent, pi: number, playlistUid: string) {
 		if (isDraggingFolderType(e)) return;
+		e.preventDefault();
 		if (draggingPlaylistUid && draggingPlaylistUid !== playlistUid) {
 			gridDropTarget = { kind: "playlist", index: pi, side: getSide(e) };
-		} else {
+		} else if (!draggingPlaylistUid) {
 			gridDropTarget = null;
-			if (playlistHoverTimer !== null) clearTimeout(playlistHoverTimer);
-			playlistHoverTimer = setTimeout(() => setHoveredPlaylist(playlistUid), 600);
+			schedulePlaylistHover(playlistUid);
 		}
 	}
 
@@ -280,8 +295,8 @@
 		e.preventDefault();
 		if (isDraggingFolderType(e) && draggingFolderPath && compactFolderDrop) {
 			await doCompactFolderReorder(draggingFolderPath, ri, compactFolderDrop.side, playlists, currentPath, sortField, sortDir, expandedFolders);
-		} else if (dragState.payload?.sourcePlaylistUid) {
-			await movePlaylists([dragState.payload.sourcePlaylistUid], folderPath);
+		} else if (draggingPlaylistUid) {
+			await movePlaylists([draggingPlaylistUid], folderPath);
 		}
 		compactFolderDrop = null;
 		handleDragEnd();
@@ -418,7 +433,7 @@
 							ondragstart={(e) => handlePlaylistDragStart(e, p.uid)}
 							ondragend={handleDragEnd}
 							ondragover={(e) => onGridPlaylistDragOver(e, pi, p.uid)}
-							ondragleave={() => { clearGridDrop(); setHoveredPlaylist(null); if (playlistHoverTimer !== null) { clearTimeout(playlistHoverTimer); playlistHoverTimer = null; } }}
+							ondragleave={() => { clearGridDrop(); setHoveredPlaylist(null); cancelPlaylistHover(); }}
 							ondrop={(e) => onGridPlaylistDrop(e, pi, p.uid)}
 						/>
 					{/each}
@@ -515,8 +530,8 @@
 								ondragover={(e) => handleCompactPlaylistDragOver(e, pi, row.folderPath)}
 								ondragleave={() => { compactDrop = null; }}
 								ondrop={(e) => handleCompactPlaylistDrop(e, pi, row.folderPath)}
-								onrowdragover={(e) => { e.preventDefault(); setHoveredPlaylist(row.playlist.uid); }}
-								onrowdragleave={() => setHoveredPlaylist(null)}
+								onrowdragover={(e) => { e.preventDefault(); setHoveredPlaylist(row.playlist.uid); if (!draggingPlaylistUid) schedulePlaylistHover(row.playlist.uid); }}
+								onrowdragleave={() => { setHoveredPlaylist(null); cancelPlaylistHover(); }}
 								onrowdrop={(e) => dropOnPlaylist(e, row.playlist.uid)}
 							/>
 						{/if}

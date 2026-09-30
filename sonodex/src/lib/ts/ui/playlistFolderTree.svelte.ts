@@ -6,7 +6,7 @@ export type PlaylistSortField = "title" | "date_created" | "custom";
 
 export type CompactRow =
 	| { kind: "folder"; path: string; depth: number }
-	| { kind: "playlist"; playlist: Playlist; depth: number; folderPath: string };
+	| { kind: "playlist"; playlist: Playlist; depth: number; folderPath: string | null };
 
 export function folderOf(p: Playlist): string | null {
 	const f = (p as any).folder;
@@ -106,10 +106,10 @@ export function compactRows(
 		result.push({ kind: "folder", path: fp, depth });
 		if (expandedFolders.has(fp)) {
 			result.push(...compactRows(playlists, fp, sortField, sortDir, expandedFolders, depth + 1));
-			for (const p of getDirectPlaylists(playlists, fp, sortField, sortDir)) {
-				result.push({ kind: "playlist", playlist: p, depth: depth + 1, folderPath: fp });
-			}
 		}
+	}
+	for (const p of getDirectPlaylists(playlists, parentPath, sortField, sortDir)) {
+		result.push({ kind: "playlist", playlist: p, depth, folderPath: parentPath });
 	}
 	return result;
 }
