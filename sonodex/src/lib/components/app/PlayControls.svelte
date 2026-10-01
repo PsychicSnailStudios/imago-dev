@@ -10,7 +10,7 @@
 	import { Slider } from "$shadcn/slider/index.js";
 
 	// SCRIPTS
-	import { getQueuedTracks, togglePlay, seek, skipBack, skipNext, toggleLoop, toggleShuffle, setVolume, toggleMute } from "$ts/audio/audioManager.svelte";
+	import { getQueuedTracks, getQueuedTracksAll, togglePlay, seek, skipBack, skipNext, toggleLoop, toggleShuffle, setVolume, toggleMute } from "$ts/audio/audioManager.svelte";
 	import { player, getQueueIndex } from "$ts/audio/audioPlayer.svelte";
 
 	// VARIABLES
@@ -44,13 +44,10 @@
 	}
 
 	let canSkipForward = $derived.by(() => {
-		let queueIndex = getQueueIndex();
-		let queueCount = getQueuedTracks().length;
+		let hasNextTrack = getQueuedTracks().length > 0;
+		let canLoopAround = player.loopType === 2 && player.track !== null && getQueuedTracksAll().length > 0;
 
-		let hasNextTrack = queueIndex < queueCount - 1;
-    	let isPlayerActive = player.loopType !== 0 && player.track !== null;
-
-    return hasNextTrack || isPlayerActive;
+		return hasNextTrack || canLoopAround;
 	})
 
 </script>
