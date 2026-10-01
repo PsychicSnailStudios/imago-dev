@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { onMount } from "svelte";
 	import { invoke } from "@tauri-apps/api/core";
 
 	import ArtworkDisplay from "$lib/components/custom/ArtworkDisplay.svelte";
@@ -7,6 +6,7 @@
 
 	import { getAlbum, getArtist, getTrackArray } from "$ts/store/library.svelte";
 	import { setSelection } from "$ts/store/session.svelte";
+	import { scrobbleSignal } from "$ts/audio/scrobbler.svelte";
 	import type { Track, Album, Artist } from "$ts/util/types";
     import { parseArtistsToString, parseAlbumEntries } from "$ts/util/parsers";
 
@@ -329,7 +329,7 @@
 		});
 	});
 
-	onMount(async () => {
+	async function loadScrobbles() {
 		try {
 			allScrobbles = await invoke<Scrobble[]>("get_scrobbles");
 		} catch (e) {
@@ -337,6 +337,11 @@
 		} finally {
 			loading = false;
 		}
+	}
+
+	$effect(() => {
+		scrobbleSignal.version;
+		loadScrobbles();
 	});
 </script>
 

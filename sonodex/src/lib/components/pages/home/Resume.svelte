@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { onMount } from "svelte";
 	import { invoke } from "@tauri-apps/api/core";
 
 	import ArtworkDisplay from "$lib/components/custom/ArtworkDisplay.svelte";
@@ -7,6 +6,7 @@
 
 	import { getAlbum, getArtist, getPlaylist, getTrack, getTrackArrayFromUID } from "$ts/store/library.svelte";
 	import { setSelection } from "$ts/store/session.svelte";
+	import { scrobbleSignal } from "$ts/audio/scrobbler.svelte";
 	import { parseAlbumEntries, parseUidType } from "$ts/util/parsers";
 	import type { Album, Artist, Playlist } from "$ts/util/types";
 
@@ -43,7 +43,7 @@
 	let recentItems = $state<ResumeItem[]>([]);
 	let loading = $state(true);
 
-	onMount(async () => {
+	async function refresh() {
 		try {
 			recentItems = await loadRecentItems();
 		} catch (e) {
@@ -51,6 +51,11 @@
 		} finally {
 			loading = false;
 		}
+	}
+
+	$effect(() => {
+		scrobbleSignal.version;
+		refresh();
 	});
 
 	async function resolveItem(uid: string): Promise<ResumeItem | null> {

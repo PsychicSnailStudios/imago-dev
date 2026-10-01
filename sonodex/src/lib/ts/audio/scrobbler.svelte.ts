@@ -4,6 +4,8 @@ import { offlineMode } from "$ts/store/session.svelte";
 import { parseArtists, parseAlbumEntries } from "$ts/util/parsers";
 import type { Track } from "$ts/util/types";
 
+export const scrobbleSignal = $state({ version: 0 });
+
 let activeScrobbleUid: string | null = null;
 let activeTrackUid: string | null = null;
 let activeTrackStartTime: number = 0;
@@ -45,6 +47,7 @@ export async function scrobbleStart(
 			albumUid: firstAlbum?.uid || null,
 			sourceUid: track.play_source_uid || null,
 		});
+		scrobbleSignal.version++;
 	} catch (e) {
 		console.error("scrobbleStart failed", e);
 		activeScrobbleUid = null;
@@ -79,6 +82,7 @@ export async function scrobbleEnd(
 			reasonEnd: reason,
 			skipped,
 		});
+		scrobbleSignal.version++;
 	} catch (e) {
 		console.error("scrobbleEnd failed", e);
 	}
