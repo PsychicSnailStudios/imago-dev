@@ -314,13 +314,22 @@
 											<Button variant="link" size="sm" onclick={() => (tab = "tracks")}>See all {tracks.length}</Button>
 										{/if}
 									</div>
-									<div class="flex gap-2 overflow-x-auto pb-1">
+									<!-- <div class="flex gap-2 overflow-x-auto pb-1">
 										{#each tracks.slice(0, ROW_LIMIT) as track (track.uid)}
 											<div role="presentation" class="w-36 shrink-0" onclick={remember}>
 												<AudioCard title={track.title ?? "Unknown Title"} subTitle={parseArtistsToString(track.artists)} entity={track} type="track" />
 											</div>
 										{/each}
-									</div>
+									</div> -->
+									<ScrollArea orientation="horizontal" class="min-h-0 min-w-0">
+										<div class="grid gap-2 pb-4" style="grid-auto-columns: 150px; grid-auto-flow: column;">
+											{#each tracks.slice(0, ROW_LIMIT) as track (track.uid)}
+												<div role="presentation" class="w-36 shrink-0" onclick={remember}>
+													<AudioCard title={track.title ?? "Unknown Title"} subTitle={parseArtistsToString(track.artists)} entity={track} type="track" />
+												</div>
+											{/each}
+										</div>
+									</ScrollArea>
 								</section>
 							{/if}
 
@@ -332,13 +341,22 @@
 											<Button variant="link" size="sm" onclick={() => (tab = "albums")}>See all {albums.length}</Button>
 										{/if}
 									</div>
-									<div class="flex gap-2 overflow-x-auto pb-1">
+									<!-- <div class="flex gap-2 overflow-x-auto pb-1">
 										{#each albums.slice(0, ROW_LIMIT) as album (album.uid)}
 											<div role="presentation" class="w-36 shrink-0" onclick={remember}>
 												<AudioCard title={album.title} subTitle={album.album_artist ?? "Unknown Artist"} entity={album} type="album" />
 											</div>
 										{/each}
-									</div>
+									</div> -->
+									<ScrollArea orientation="horizontal" class="min-h-0 min-w-0">
+										<div class="grid gap-2 pb-4" style="grid-auto-columns: 150px; grid-auto-flow: column;">
+											{#each albums.slice(0, ROW_LIMIT) as album (album.uid)}
+												<div role="presentation" class="w-36 shrink-0" onclick={remember}>
+													<AudioCard title={album.title} subTitle={album.album_artist ?? "Unknown Artist"} entity={album} type="album" />
+												</div>
+											{/each}
+										</div>
+									</ScrollArea>
 								</section>
 							{/if}
 
@@ -350,13 +368,22 @@
 											<Button variant="link" size="sm" onclick={() => (tab = "artists")}>See all {artists.length}</Button>
 										{/if}
 									</div>
-									<div class="flex gap-2 overflow-x-auto pb-1">
+									<!-- <div class="flex gap-2 overflow-x-auto pb-1">
 										{#each artists.slice(0, ROW_LIMIT) as artist (artist.uid)}
 											<div role="presentation" class="w-36 shrink-0" onclick={remember}>
 												<AudioCard title={artist.name} subTitle="Artist" entity={artist} type="artist" />
 											</div>
 										{/each}
-									</div>
+									</div> -->
+									<ScrollArea orientation="horizontal" class="min-h-0 min-w-0">
+										<div class="grid gap-2 pb-4" style="grid-auto-columns: 150px; grid-auto-flow: column;">
+											{#each artists.slice(0, ROW_LIMIT) as artist (artist.uid)}
+												<div role="presentation" class="w-36 shrink-0" onclick={remember}>
+													<AudioCard title={artist.name} subTitle="Artist" entity={artist} type="artist" />
+												</div>
+											{/each}
+										</div>
+									</ScrollArea>
 								</section>
 							{/if}
 
