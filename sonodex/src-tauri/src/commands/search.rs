@@ -1,9 +1,9 @@
-use crate::db::search_manager;
-use crate::db::track_manager::Track;
 use crate::db::album_manager::Album;
 use crate::db::artist_manager::Artist;
-use crate::state::AppState;
+use crate::db::search_manager;
+use crate::db::track_manager::Track;
 use crate::open_merged_conn;
+use crate::state::AppState;
 use tauri::State;
 
 #[tauri::command]

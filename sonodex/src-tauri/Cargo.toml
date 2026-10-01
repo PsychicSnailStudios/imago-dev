@@ -52,6 +52,7 @@ tauri-plugin-single-instance = "2"
 zip = "2"
 chrono = { version = "0.4", features = ["serde"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+tauri-plugin-opener = "2"
 
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-window-state = "2.4.1"

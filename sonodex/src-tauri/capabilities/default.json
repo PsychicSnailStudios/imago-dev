@@ -36,6 +36,8 @@
     "window-state:default",
     "core:window:allow-destroy",
     "dialog:allow-save",
-    "dialog:default"
+    "dialog:default",
+    "opener:default",
+    "opener:allow-reveal-item-in-dir"
   ]
 }

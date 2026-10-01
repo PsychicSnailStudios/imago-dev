@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { revealItemInDir } from "@tauri-apps/plugin-opener";
+
 	import { Pencil } from "lucide-svelte";
 
 	import * as Tabs from "$shadcn/tabs/index.js";
@@ -259,7 +261,16 @@
 
 				<Tabs.Content value="paths" class="flex-1 overflow-y-auto mt-2">
 					<div class="flex flex-col gap-2 mt-2">
-						<span class="text-muted-foreground text-sm"><b>Local Path:</b> {track.path}</span>
+						<span class="text-muted-foreground text-sm">
+							<b>Local Path:</b>
+							{#if track.path && track.path !== track.uid}
+								<button
+									onclick={() => revealItemInDir(track!.path)}
+									class="cursor-pointer text-left hover:underline">
+									{track.path}
+								</button>
+							{/if}
+						</span>
 						<span class="text-muted-foreground text-sm"><b>Remote Path:</b> {(track as any).remote_path}</span>
 					</div>
 				</Tabs.Content>

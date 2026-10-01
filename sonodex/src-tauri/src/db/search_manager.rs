@@ -1,7 +1,7 @@
-use rusqlite::{params, Connection, Result};
-use crate::db::track_manager::Track;
-use crate::db::album_manager::{Album};
+use crate::db::album_manager::Album;
 use crate::db::artist_manager::Artist;
+use crate::db::track_manager::Track;
+use rusqlite::{params, Connection, Result};
 
 // ─── Track search ─────────────────────────────────────────────────────────────
 //
@@ -202,7 +202,9 @@ pub fn get_tracks_by_uids(conn: &Connection, uids: &[String]) -> Result<Vec<Trac
     }
 
     // Build a parameterised IN clause
-    let placeholders = uids.iter().enumerate()
+    let placeholders = uids
+        .iter()
+        .enumerate()
         .map(|(i, _)| format!("?{}", i + 1))
         .collect::<Vec<_>>()
         .join(", ");
@@ -263,13 +265,22 @@ pub fn get_tracks_by_uids(conn: &Connection, uids: &[String]) -> Result<Vec<Trac
 // artists JSON array (a plain array of name strings).
 // aka_uids is the list of alias artist UIDs to include alongside the primary.
 
-pub fn get_artist_albums(conn: &Connection, artist_uid: &str, aka_uids: &[String]) -> Result<Vec<Album>> {
+pub fn get_artist_albums(
+    conn: &Connection,
+    artist_uid: &str,
+    aka_uids: &[String],
+) -> Result<Vec<Album>> {
     // Resolve every uid (primary + akas) to its artist name
     let mut all_uids = vec![artist_uid.to_string()];
     all_uids.extend_from_slice(aka_uids);
 
-    let names: Vec<String> = all_uids.iter()
-        .filter_map(|uid| crate::db::artist_manager::get_artist_by_uid(conn, uid).ok().flatten())
+    let names: Vec<String> = all_uids
+        .iter()
+        .filter_map(|uid| {
+            crate::db::artist_manager::get_artist_by_uid(conn, uid)
+                .ok()
+                .flatten()
+        })
         .map(|a| a.name)
         .collect();
 
@@ -278,12 +289,16 @@ pub fn get_artist_albums(conn: &Connection, artist_uid: &str, aka_uids: &[String
     }
 
     // Build OR conditions for each name
-    let name_conditions: Vec<String> = names.iter().enumerate()
-        .map(|(i, _)| format!(
-            "LOWER(album_artist) = ?{idx} OR LOWER(artists) LIKE ?{like_idx}",
-            idx = i * 2 + 1,
-            like_idx = i * 2 + 2,
-        ))
+    let name_conditions: Vec<String> = names
+        .iter()
+        .enumerate()
+        .map(|(i, _)| {
+            format!(
+                "LOWER(album_artist) = ?{idx} OR LOWER(artists) LIKE ?{like_idx}",
+                idx = i * 2 + 1,
+                like_idx = i * 2 + 2,
+            )
+        })
         .collect();
 
     let sql = format!(
@@ -298,7 +313,8 @@ pub fn get_artist_albums(conn: &Connection, artist_uid: &str, aka_uids: &[String
     let mut stmt = conn.prepare(&sql)?;
 
     // Interleave the exact-match value and LIKE pattern for each name
-    let params_vec: Vec<Box<dyn rusqlite::ToSql>> = names.iter()
+    let params_vec: Vec<Box<dyn rusqlite::ToSql>> = names
+        .iter()
         .flat_map(|name| {
             let lower = name.to_lowercase();
             let like_pattern = format!("%\"{}\"%", lower);
@@ -309,32 +325,38 @@ pub fn get_artist_albums(conn: &Connection, artist_uid: &str, aka_uids: &[String
         .collect();
 
     let albums = stmt
-        .query_map(rusqlite::params_from_iter(params_vec.iter().map(|p| p.as_ref())), |row| {
-            Ok(Album {
-                id: row.get(0)?,
-                uid: row.get(1)?,
-                format: row.get(2)?,
-                title: row.get(3)?,
-                rating: row.get(4)?,
-                artists: row.get(5)?,
-                album_artist: row.get(6)?,
-                release_date: row.get(7)?,
-                tags: row.get(8)?,
-                genres: row.get(9)?,
-                tracks: row.get(10)?,
-                credits: row.get(11)?,
-                label: row.get(12)?,
-                artwork_blob: None,
-                artwork_path: row.get(13)?,
-                artwork_thumb: row.get(14)?,
-                emulate_type: row.get(15)?,
-            })
-        })?
+        .query_map(
+            rusqlite::params_from_iter(params_vec.iter().map(|p| p.as_ref())),
+            |row| {
+                Ok(Album {
+                    id: row.get(0)?,
+                    uid: row.get(1)?,
+                    format: row.get(2)?,
+                    title: row.get(3)?,
+                    rating: row.get(4)?,
+                    artists: row.get(5)?,
+                    album_artist: row.get(6)?,
+                    release_date: row.get(7)?,
+                    tags: row.get(8)?,
+                    genres: row.get(9)?,
+                    tracks: row.get(10)?,
+                    credits: row.get(11)?,
+                    label: row.get(12)?,
+                    artwork_blob: None,
+                    artwork_path: row.get(13)?,
+                    artwork_thumb: row.get(14)?,
+                    emulate_type: row.get(15)?,
+                })
+            },
+        )?
         .collect::<Result<Vec<_>>>()?;
 
     // Deduplicate by uid (a featuring appearance + album_artist match could double-return)
     let mut seen = std::collections::HashSet::new();
-    let deduped = albums.into_iter().filter(|a| seen.insert(a.uid.clone())).collect();
+    let deduped = albums
+        .into_iter()
+        .filter(|a| seen.insert(a.uid.clone()))
+        .collect();
 
     Ok(deduped)
 }
