@@ -1,22 +1,47 @@
 import { invoke } from "@tauri-apps/api/core";
-import { getTracks, getPlaylist, getTrackArray, reloadLibrary } from "$ts/store/library.svelte";
+import { resolveResource } from "@tauri-apps/api/path";
+import { getTracks, getPlaylist, reloadLibrary } from "$ts/store/library.svelte";
 import { parseAlbumEntries } from "$ts/util/parsers";
 import type { Playlist, Track, TrackEntry } from "$ts/util/types";
+import {
+	playlistDefinitions,
+	type DateRange,
+	type PlaylistDefinition,
+	type PlaylistFilters,
+	type Rank,
+	type Refresh,
+} from "./explorePlaylistDefinitions";
 
-const OWNER = "Imago";
 const DAY_SECONDS = 24 * 60 * 60;
-const WEEK_SECONDS = 7 * DAY_SECONDS;
-const MIN_PLAY_MS = 30_000;
-const ON_LOOP_LIMIT = 50;
-const RECENT_LIMIT = 100;
-const ON_LOOP_UID = "p-explore-on-loop";
-const RECENT_UID = "p-explore-recently-added";
+const DEFAULT_MIN_PLAY_MS = 30_000;
+const REFRESH_KEY_PREFIX = "explore_last_refresh:";
+const ARTWORK_DIR = "assets/artwork";
 
 type ScrobbleRow = {
 	track_uid: string;
 	timestamp: number;
 	duration_played: number;
 };
+
+type PlayStats = {
+	plays: number;
+	ms: number;
+	last: number;
+	stamps: number[];
+};
+
+type Window = { from: number; to: number };
+
+type RankContext = {
+	tracks: Track[];
+	stats: Map<string, PlayStats>;
+	windowDays: number;
+	limit: number;
+};
+
+type Scorer = (track: Track) => number | null;
+type Ranker = (ctx: RankContext) => Scorer;
+type TrackFilter = (track: Track, filters: PlaylistFilters, now: number) => boolean;
 
 let explorePlaylists = $state<Playlist[]>([]);
 
@@ -35,6 +60,42 @@ function shuffle<T>(items: T[]): T[] {
 
 function addedAt(track: Track): number {
 	return track.date_added ?? 0;
+}
+
+function parseList(raw: unknown): unknown[] {
+	if (Array.isArray(raw)) return raw;
+	if (typeof raw !== "string" || raw === "") return [];
+	try {
+		const parsed = JSON.parse(raw);
+		return Array.isArray(parsed) ? parsed : [];
+	} catch {
+		return [];
+	}
+}
+
+function namesOf(raw: unknown): string[] {
+	return parseList(raw)
+		.map((item) => (typeof item === "string" ? item : ((item as { name?: string })?.name ?? "")))
+		.filter(Boolean)
+		.map((name) => name.toLowerCase());
+}
+
+function matchesAny(wanted: string[] | undefined, have: string[]): boolean {
+	if (!wanted || wanted.length === 0) return true;
+	const set = new Set(wanted.map((name) => name.toLowerCase()));
+	return have.some((name) => set.has(name));
+}
+
+function resolveRange(range: DateRange | undefined, now: number): Window | null {
+	if (!range) return null;
+	const to = range.to ?? now;
+	const from = range.from ?? (range.lastDays !== undefined ? to - range.lastDays * DAY_SECONDS : 0);
+	return { from, to };
+}
+
+function inWindow(value: number, window: Window | null): boolean {
+	if (!window) return true;
+	return value >= window.from && value <= window.to;
 }
 
 function albumKey(track: Track): string {
@@ -76,53 +137,191 @@ function pickVaried(tracks: Track[], limit: number): Track[] {
 	return picked;
 }
 
-async function buildOnLoop(): Promise<Track[]> {
-	const scrobbles = await invoke<ScrobbleRow[]>("get_scrobbles");
-	const cutoff = nowSeconds() - WEEK_SECONDS;
-	const stats = new Map<string, { plays: number; ms: number; last: number }>();
+const trackFilters: TrackFilter[] = [
+	(track, filters) => matchesAny(filters.artists, namesOf(track.artists)),
+	(track, filters) => matchesAny(filters.tags, namesOf(track.tags)),
+	(track, filters) => matchesAny(filters.genres, namesOf(track.genres)),
+	(track, filters) => filters.minRating === undefined || (track.rating ?? 0) >= filters.minRating,
+	(track, filters, now) => inWindow(addedAt(track), resolveRange(filters.added, now)),
+];
 
+function statScorer(
+	ctx: RankContext,
+	score: (stat: PlayStats, ctx: RankContext) => number | null,
+	direction: 1 | -1,
+): Scorer {
+	return (track) => {
+		const stat = ctx.stats.get(track.uid);
+		if (!stat) return null;
+		const value = score(stat, ctx);
+		return value === null ? null : value * direction;
+	};
+}
+
+function averageGap(stat: PlayStats): number | null {
+	if (stat.stamps.length < 2) return null;
+	const sorted = [...stat.stamps].sort((a, b) => a - b);
+	return (sorted[sorted.length - 1] - sorted[0]) / (sorted.length - 1);
+}
+
+const rankers: Record<Rank, Ranker> = {
+	rate: (ctx) => statScorer(ctx, (stat, c) => stat.plays / c.windowDays, 1),
+	totalTime: (ctx) => statScorer(ctx, (stat) => stat.ms, 1),
+	consistency: (ctx) =>
+		statScorer(ctx, (stat) => new Set(stat.stamps.map((t) => Math.floor(t / DAY_SECONDS))).size, 1),
+	gap: (ctx) => statScorer(ctx, (stat) => averageGap(stat), -1),
+	rating: () => (track) => ((track.rating ?? 0) > 0 ? (track.rating as number) : null),
+	recentlyAdded: () => (track) => (addedAt(track) > 0 ? addedAt(track) : null),
+};
+
+function tieBreak(ctx: RankContext, a: Track, b: Track): number {
+	const statA = ctx.stats.get(a.uid);
+	const statB = ctx.stats.get(b.uid);
+	return (
+		(statB?.plays ?? 0) - (statA?.plays ?? 0) ||
+		(statB?.ms ?? 0) - (statA?.ms ?? 0) ||
+		(statB?.last ?? 0) - (statA?.last ?? 0) ||
+		addedAt(b) - addedAt(a)
+	);
+}
+
+function rankTracks(ctx: RankContext, ranks: Rank[]): Track[] {
+	const scorers = ranks.map((rank) => rankers[rank](ctx));
+	const scored: { track: Track; values: number[] }[] = [];
+	for (const track of ctx.tracks) {
+		const values: number[] = [];
+		let valid = true;
+		for (const scorer of scorers) {
+			const value = scorer(track);
+			if (value === null) {
+				valid = false;
+				break;
+			}
+			values.push(value);
+		}
+		if (valid) scored.push({ track, values });
+	}
+	scored.sort((a, b) => {
+		for (let i = 0; i < a.values.length; i++) {
+			const diff = b.values[i] - a.values[i];
+			if (diff !== 0) return diff;
+		}
+		return tieBreak(ctx, a.track, b.track);
+	});
+	return scored.map((entry) => entry.track);
+}
+
+function recentlyAddedVaried(tracks: Track[], limit: number): Track[] {
+	const sorted = tracks.filter((track) => addedAt(track) > 0).sort((a, b) => addedAt(b) - addedAt(a));
+	const dayCutoff = nowSeconds() - DAY_SECONDS;
+	const lastDay = sorted.filter((track) => addedAt(track) >= dayCutoff);
+	if (lastDay.length > limit) return pickVaried(lastDay, limit);
+	return sorted;
+}
+
+const scrobbleRanks: Rank[] = ["rate", "totalTime", "consistency", "gap"];
+
+function buildStats(
+	scrobbles: ScrobbleRow[],
+	window: Window | null,
+	minPlayMs: number,
+): Map<string, PlayStats> {
+	const stats = new Map<string, PlayStats>();
 	for (const scrobble of scrobbles) {
-		if (scrobble.timestamp < cutoff || scrobble.duration_played < MIN_PLAY_MS) continue;
-		const entry = stats.get(scrobble.track_uid) ?? { plays: 0, ms: 0, last: 0 };
+		if (!inWindow(scrobble.timestamp, window) || scrobble.duration_played < minPlayMs) continue;
+		const entry = stats.get(scrobble.track_uid) ?? { plays: 0, ms: 0, last: 0, stamps: [] };
 		entry.plays += 1;
 		entry.ms += scrobble.duration_played;
 		entry.last = Math.max(entry.last, scrobble.timestamp);
+		entry.stamps.push(scrobble.timestamp);
 		stats.set(scrobble.track_uid, entry);
 	}
-
-	const ranked = [...stats.entries()]
-		.sort((a, b) => b[1].plays - a[1].plays || b[1].ms - a[1].ms || b[1].last - a[1].last)
-		.map(([uid]) => uid)
-		.slice(0, ON_LOOP_LIMIT * 3);
-
-	if (ranked.length === 0) return [];
-
-	const tracks = await getTrackArray(ranked);
-	const byUid = new Map(tracks.map((track) => [track.uid, track]));
-	return ranked
-		.map((uid) => byUid.get(uid))
-		.filter((track): track is Track => !!track)
-		.slice(0, ON_LOOP_LIMIT);
+	return stats;
 }
 
-async function buildRecentlyAdded(): Promise<Track[]> {
-	const all = await getTracks();
-	const sorted = all
-		.filter((track) => addedAt(track) > 0)
-		.sort((a, b) => addedAt(b) - addedAt(a));
+function computeWindowDays(window: Window | null, stats: Map<string, PlayStats>, now: number): number {
+	const end = window?.to ?? now;
+	let earliest = Infinity;
+	for (const stat of stats.values()) {
+		for (const stamp of stat.stamps) earliest = Math.min(earliest, stamp);
+	}
+	const start = window && window.from > 0 ? window.from : isFinite(earliest) ? earliest : end;
+	return Math.max(1, (end - start) / DAY_SECONDS);
+}
 
-	const dayCutoff = nowSeconds() - DAY_SECONDS;
-	const lastDay = sorted.filter((track) => addedAt(track) >= dayCutoff);
+async function buildTracks(
+	def: PlaylistDefinition,
+	allTracks: Track[],
+	loadScrobbles: () => Promise<ScrobbleRow[]>,
+	now: number,
+): Promise<Track[]> {
+	const filters = def.filters;
+	const ranks = Array.isArray(def.rank) ? def.rank : [def.rank];
+	const minPlayMs = filters.minPlayMs ?? DEFAULT_MIN_PLAY_MS;
+	let tracks = allTracks.filter((track) => trackFilters.every((filter) => filter(track, filters, now)));
+	let stats = new Map<string, PlayStats>();
+	const window = resolveRange(filters.scrobbleRange, now);
+	const unplayedWindow = resolveRange(filters.unplayedRange, now);
 
-	if (lastDay.length > RECENT_LIMIT) return pickVaried(lastDay, RECENT_LIMIT);
-	return sorted.slice(0, RECENT_LIMIT);
+	if (ranks.some((rank) => scrobbleRanks.includes(rank)) || window || unplayedWindow) {
+		const scrobbles = await loadScrobbles();
+		stats = buildStats(scrobbles, window, minPlayMs);
+		if (window) tracks = tracks.filter((track) => stats.has(track.uid));
+		if (unplayedWindow) {
+			const recent = buildStats(scrobbles, unplayedWindow, minPlayMs);
+			tracks = tracks.filter((track) => !recent.has(track.uid));
+		}
+	}
+
+	if (ranks.length === 1 && ranks[0] === "recentlyAdded") {
+		return recentlyAddedVaried(tracks, def.maxTracks).slice(0, def.maxTracks);
+	}
+
+	const ctx: RankContext = {
+		tracks,
+		stats,
+		windowDays: computeWindowDays(window, stats, now),
+		limit: def.maxTracks,
+	};
+	return rankTracks(ctx, ranks).slice(0, def.maxTracks);
+}
+
+function isDue(refresh: Refresh, last: number, now: number): boolean {
+	if (refresh === "open") return true;
+	if (refresh === "never") return false;
+	return now - last >= refresh.days * DAY_SECONDS;
+}
+
+async function loadRefreshTimes(): Promise<Map<string, number>> {
+	const settings = await invoke<{ key: string; value: string }[]>("get_settings");
+	const times = new Map<string, number>();
+	for (const setting of settings) {
+		if (!setting.key.startsWith(REFRESH_KEY_PREFIX)) continue;
+		times.set(setting.key.slice(REFRESH_KEY_PREFIX.length), Number(setting.value) || 0);
+	}
+	return times;
+}
+
+async function saveRefreshTime(uid: string, time: number): Promise<void> {
+	await invoke("save_setting", { key: REFRESH_KEY_PREFIX + uid, value: String(time) });
+}
+
+async function resolveArtwork(artwork: string | null): Promise<string | null> {
+	if (!artwork) return null;
+	if (/^([a-zA-Z]:[\\/]|[\\/]|https?:)/.test(artwork)) return artwork;
+	try {
+		const path = await resolveResource(`${ARTWORK_DIR}/${artwork}`);
+		return path.replace(/^\\\\\?\\/, "");
+	} catch (e) {
+		console.error(`explore artwork ${artwork} could not be resolved`, e);
+		return null;
+	}
 }
 
 async function upsertPlaylist(
-	uid: string,
-	title: string,
-	description: string,
+	def: PlaylistDefinition,
 	tracks: Track[],
+	existing: Playlist | null,
 ): Promise<Playlist | null> {
 	const entries: TrackEntry[] = tracks.map((track, i) => ({
 		uid: track.uid,
@@ -130,53 +329,66 @@ async function upsertPlaylist(
 		order: i + 1,
 	}));
 	const tracksJson = JSON.stringify(entries);
-	const existing = await getPlaylist(uid);
+	const artwork = await resolveArtwork(def.artwork);
 
 	if (existing) {
-		await invoke("update_playlist_entry", {
-			uid,
-			update: { title, description, owner: OWNER, tracks: tracksJson },
-		});
-		return entries.length === 0 ? null : await getPlaylist(uid);
+		const update: Record<string, unknown> = {
+			title: def.title,
+			description: def.description,
+			owner: def.owner,
+			tracks: tracksJson,
+		};
+		if (artwork !== null) update.artwork_path = artwork;
+		await invoke("update_playlist_entry", { uid: def.uid, update });
+		return entries.length === 0 ? null : await getPlaylist(def.uid);
 	}
 
 	if (entries.length === 0) return null;
 
 	await invoke("create_playlist_entry", {
 		playlist: {
-			uid,
-			title,
-			description,
-			owner: OWNER,
+			uid: def.uid,
+			title: def.title,
+			description: def.description,
+			owner: def.owner,
 			tracks: tracksJson,
-			artwork_path: null,
+			artwork_path: artwork,
 			folder: null,
 			version: 1,
 		},
 	});
-	return await getPlaylist(uid);
+	return await getPlaylist(def.uid);
 }
 
 async function setExplorePlaylists(): Promise<void> {
 	try {
-		const [onLoopTracks, recentTracks] = await Promise.all([buildOnLoop(), buildRecentlyAdded()]);
+		const now = nowSeconds();
+		const [allTracks, refreshTimes] = await Promise.all([getTracks(), loadRefreshTimes()]);
 
-		const onLoop = await upsertPlaylist(
-			ON_LOOP_UID,
-			"On Loop",
-			"Your 50 most played tracks over the last week",
-			onLoopTracks,
-		);
-		const recent = await upsertPlaylist(
-			RECENT_UID,
-			"Recently Added",
-			"The newest tracks in your library",
-			recentTracks,
-		);
+		let scrobblePromise: Promise<ScrobbleRow[]> | null = null;
+		const loadScrobbles = () => {
+			scrobblePromise ??= invoke<ScrobbleRow[]>("get_scrobbles");
+			return scrobblePromise;
+		};
 
-		const playlists = [onLoop, recent].filter((playlist): playlist is Playlist => playlist !== null);
+		const playlists: Playlist[] = [];
+		for (const def of playlistDefinitions) {
+			try {
+				const existing = (await getPlaylist(def.uid)) ?? null;
+				if (existing && !isDue(def.refresh, refreshTimes.get(def.uid) ?? 0, now)) {
+					playlists.push(existing);
+					continue;
+				}
+				const tracks = await buildTracks(def, allTracks, loadScrobbles, now);
+				const playlist = await upsertPlaylist(def, tracks, existing);
+				await saveRefreshTime(def.uid, now);
+				if (playlist) playlists.push(playlist);
+			} catch (e) {
+				console.error(`explore playlist ${def.uid} failed`, e);
+			}
+		}
+
 		explorePlaylists.splice(0, explorePlaylists.length, ...playlists);
-
 		await reloadLibrary("playlists");
 	} catch (e) {
 		console.error("setExplorePlaylists failed", e);

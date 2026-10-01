@@ -49,6 +49,9 @@
     ],
     "externalBin": [
       "binaries/ffmpeg"
+    ],
+    "resources": [
+      "assets/artwork/*"
     ]
   },
 	"plugins": {
