@@ -169,7 +169,13 @@ pub fn run() {
     let app_state = AppState::new(initial_uid.clone());
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+			if let Some(w) = app.get_webview_window("main") {
+				let _ = w.unminimize();
+				let _ = w.set_focus();
+			}
+		}))
+		.plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {}))
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             if let Some(url) = argv.iter().find(|a| a.starts_with("imago://")) {
@@ -210,6 +216,11 @@ pub fn run() {
                 watcher::start_watcher(handle.clone(), uid, default_lib_uid, paths);
             }
 
+            #[cfg(any(windows, target_os = "linux"))]
+			if cfg!(debug_assertions) {
+				app.deep_link().register_all()?;
+			}
+            
             app.deep_link().on_open_url(move |event| {
                 for url in event.urls() {
                     handle_deep_link(handle.clone(), url.as_str());

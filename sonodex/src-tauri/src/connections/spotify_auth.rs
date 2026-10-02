@@ -14,7 +14,7 @@ use crate::db::{Playlist, PlaylistTrackEntry, Track};
 
 const TOKEN_URL: &str = "https://accounts.spotify.com/api/token";
 const API_BASE: &str = "https://api.spotify.com/v1";
-const REDIRECT_URI: &str = "sonodex://spotify-callback";
+const REDIRECT_URI: &str = "imago://spotify-callback";
 const SCOPES: &str = "playlist-read-private playlist-read-collaborative user-library-read playlist-modify-public playlist-modify-private";
 
 pub fn generate_code_verifier() -> String {
