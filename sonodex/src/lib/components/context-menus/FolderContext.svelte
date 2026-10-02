@@ -5,6 +5,9 @@
 	import { getPlaylists, onLibraryChange } from "$ts/store/library.svelte";
 	import type { PlaylistSortField } from "$ts/ui/playlistFolderTree.svelte";
 	import type { Playlist } from "$ts/util/types";
+	import RenameFolder from "$lib/components/dialogs/playlists/RenameFolder.svelte";
+
+	let renameOpen = $state(false);
 
 	let {
 		path,
@@ -64,6 +67,9 @@
 		New folder inside
 	</ContextMenu.Item>
 	<ContextMenu.Separator />
+	<ContextMenu.Item onclick={() => { renameOpen = true; }}>
+		Rename
+	</ContextMenu.Item>
 	<ContextMenu.Sub>
 		<ContextMenu.SubTrigger>Move to folder</ContextMenu.SubTrigger>
 		<ContextMenu.SubContent>
@@ -88,3 +94,5 @@
 		Delete Folder + Contents
 	</ContextMenu.Item>
 </ContextMenu.Content>
+
+<RenameFolder bind:open={renameOpen} {path} existingPaths={folderPaths} />

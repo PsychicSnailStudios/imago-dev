@@ -14,17 +14,24 @@
 	let {
 		entityType,
 		entityUid,
+		entity: entityProp,
 		onchange,
 	} = $props<{
 		entityType: string;
 		entityUid: string;
+		entity?: any;
 		onchange?: (path: string | null) => void;
 	}>();
 
-	let entity = $derived({ uid: entityUid });
-
 	// VARIABLES
 	let previewPath = $state<string | null>(null);
+	let cleared = $state(false);
+
+	let entity = $derived.by(() => {
+		const base = entityProp ?? { uid: entityUid };
+		if (!cleared) return base;
+		return { ...base, artwork_path: null, artwork_thumb: null, profile_art_path: null, profile_art_thumb: null };
+	});
 	
 	// FUNCTIONS
 	async function handleUpload() {
@@ -33,6 +40,7 @@
 			multiple: false,
 		});
 		if (selected && typeof selected === "string") {
+			cleared = false;
 			previewPath = selected;
 			onchange?.(selected);
 		}
@@ -58,6 +66,7 @@
 
 	function handleClear() {
 		previewPath = null;
+		cleared = true;
 		onchange?.(null);
 	}
 </script>
@@ -70,10 +79,10 @@
 			<Upload class="w-4 h-4" />
 			Upload file
 		</Button>
-		<Button variant="outline" size="sm" onclick={handlePaste} class="justify-start gap-2">
+		<!-- <Button variant="outline" size="sm" onclick={handlePaste} class="justify-start gap-2">
 			<Clipboard class="w-4 h-4" />
 			Paste from clipboard
-		</Button>
+		</Button> -->
 		<Button variant="outline" size="sm" onclick={handleClear} class="justify-start gap-2 text-destructive hover:text-destructive">
 			<Trash2 class="w-4 h-4" />
 			Remove artwork

@@ -385,7 +385,7 @@
 				<MediaGrid>
 
 					{#each visibleChildFolders as folderPath, fi (folderPath)}
-						{@const artUids = getFolderArtworkUids(playlists, folderPath)}
+						{@const artPlaylists = getFolderArtworkUids(playlists, folderPath).map((uid) => playlists.find((p) => p.uid === uid)).filter((p): p is Playlist => !!p)}
 						{@const isDraggingThis = draggingFolderPath === folderPath}
 						{@const isReorderTarget = gridDropTarget?.kind === "folder" && gridDropTarget.index === fi}
 						{@const isMoveTarget = dragState.hoveredFolderPath === folderPath && gridDropTarget === null}
@@ -414,7 +414,7 @@
 										ondragleave={() => { clearGridDrop(); onFolderDragExit(folderPath); }}
 										ondrop={(e) => onGridFolderDrop(e, fi, folderPath)}
 									>
-										<PlaylistFolderCard folderPath={folderLabel(folderPath)} artUids={artUids} />
+										<PlaylistFolderCard folderPath={folderLabel(folderPath)} {artPlaylists} />
 									</button>
 								</div>
 							</ContextMenu.Trigger>

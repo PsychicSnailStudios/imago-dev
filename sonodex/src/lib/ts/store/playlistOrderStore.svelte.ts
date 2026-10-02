@@ -21,7 +21,25 @@ function save(store: OrderStore) {
 
 let _store = $state<OrderStore>(load());
 
+function remapPath(path: string, oldPath: string, newPath: string): string {
+	if (path === oldPath) return newPath;
+	if (path.startsWith(oldPath + "/")) return newPath + path.slice(oldPath.length);
+	return path;
+}
+
 export const playlistOrder = {
+	renameFolderPaths(oldPath: string, newPath: string) {
+		const playlists: Record<string, string[]> = {};
+		for (const [key, uids] of Object.entries(_store.playlists)) {
+			playlists[remapPath(key, oldPath, newPath)] = uids;
+		}
+		const folders: Record<string, string[]> = {};
+		for (const [key, paths] of Object.entries(_store.folders)) {
+			folders[remapPath(key, oldPath, newPath)] = paths.map((p) => remapPath(p, oldPath, newPath));
+		}
+		_store = { playlists, folders };
+		save(_store);
+	},
 	getPlaylists(folderPath: string | null): string[] {
 		return _store.playlists[folderPath ?? "__root__"] ?? [];
 	},

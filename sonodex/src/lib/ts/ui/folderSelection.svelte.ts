@@ -36,6 +36,17 @@ export function removeFolder(path: string) {
 	_knownFolders = next;
 }
 
+function remapPath(path: string, oldPath: string, newPath: string): string {
+	if (path === oldPath) return newPath;
+	if (path.startsWith(oldPath + "/")) return newPath + path.slice(oldPath.length);
+	return path;
+}
+
+export function renameFolderPaths(oldPath: string, newPath: string) {
+	_knownFolders = new Set([..._knownFolders].map((k) => remapPath(k, oldPath, newPath)));
+	if (currentPath !== null) currentPath = remapPath(currentPath, oldPath, newPath);
+}
+
 export function navigateTo(path: string | null) {
 	currentPath = path;
 }

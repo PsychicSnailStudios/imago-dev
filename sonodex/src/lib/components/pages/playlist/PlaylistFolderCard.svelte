@@ -3,20 +3,19 @@
 	import ArtworkDisplay from "$lib/components/custom/ArtworkDisplay.svelte";
 	import DefultPlaylistArt from "$lib/components/pages/playlist/DefultPlaylistArt.svelte";
 	import { getTrackArrayFromUID } from "$ts/store/library.svelte";
-	import type { Track } from "$ts/util/types";
+	import type { Track, Playlist } from "$ts/util/types";
 
-	let { folderPath, artUids } = $props<{ folderPath: string; artUids: string[] }>();
+	let { folderPath, artPlaylists } = $props<{ folderPath: string; artPlaylists: Playlist[] }>();
 
-	// Each uid needs its own resolved tracks for the DefaultPlaylistArt fallback.
-	// We load them async and store in a map keyed by uid.
 	let tracksByUid = $state<Map<string, Track[]>>(new Map());
 
+	const shown = $derived(artPlaylists.slice(0, 4));
+
 	$effect(() => {
-		const uidsToLoad = artUids.slice(0, 4);
-		for (const uid of uidsToLoad) {
-			if (!tracksByUid.has(uid)) {
-				getTrackArrayFromUID(uid).then(tracks => {
-					tracksByUid = new Map(tracksByUid).set(uid, tracks);
+		for (const p of shown) {
+			if (!tracksByUid.has(p.uid)) {
+				getTrackArrayFromUID(p.uid).then(tracks => {
+					tracksByUid = new Map(tracksByUid).set(p.uid, tracks);
 				});
 			}
 		}
@@ -25,19 +24,11 @@
 
 <div class="flex flex-col gap-1 p-2">
 	<div class="w-full aspect-square rounded-md overflow-hidden">
-		{#if artUids.length >= 4}
+		{#if shown.length > 0}
 			<div class="grid grid-cols-2 w-full h-full gap-2 p-2">
-				{#each artUids.slice(0, 4) as uid}
-					<ArtworkDisplay entity={uid}>
-						<DefultPlaylistArt tracks={tracksByUid.get(uid) ?? []} />
-					</ArtworkDisplay>
-				{/each}
-			</div>
-		{:else if artUids.length > 0}
-			<div class="grid grid-cols-2 w-full h-full gap-2 p-2">
-				{#each artUids as uid}
-					<ArtworkDisplay entity={uid}>
-						<DefultPlaylistArt tracks={tracksByUid.get(uid) ?? []} />
+				{#each shown as p (p.uid)}
+					<ArtworkDisplay entity={p}>
+						<DefultPlaylistArt tracks={tracksByUid.get(p.uid) ?? []} />
 					</ArtworkDisplay>
 				{/each}
 			</div>

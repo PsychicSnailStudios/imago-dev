@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { emitLibraryChange } from "$ts/store/library.svelte";
 import { dragState, setHoveredFolder, setDragActive, setDragPayload, endDrag } from "$ts/store/drag.svelte";
 import { isDraggingFolderType } from "$ts/drag/dragdrop";
-import { registerFolder, removeFolder } from "$ts/ui/folderSelection.svelte";
+import { registerFolder, removeFolder, renameFolderPaths } from "$ts/ui/folderSelection.svelte";
 import { addTracksToPlaylist } from "$ts/audio/playlistManager.svelte";
 import { movePlaylists } from "$ts/drag/dragdrop_playlists";
 import { getSortedFolders, getDirectPlaylists, compactFolderRows } from "$ts/ui/playlistFolderTree.svelte";
@@ -107,6 +107,18 @@ export async function moveFolderToRoot(draggedPath: string) {
 	await invoke("rename_playlist_folder", { oldPath: draggedPath, newPath: folderName });
 	removeFolder(draggedPath);
 	registerFolder(folderName);
+	emitLibraryChange("playlists:changed");
+}
+
+export async function renameFolder(oldPath: string, newName: string) {
+	const parentPath = oldPath.includes("/")
+		? oldPath.split("/").slice(0, -1).join("/")
+		: null;
+	const newPath = parentPath !== null ? `${parentPath}/${newName}` : newName;
+	if (newPath === oldPath) return;
+	await invoke("rename_playlist_folder", { oldPath, newPath });
+	renameFolderPaths(oldPath, newPath);
+	playlistOrder.renameFolderPaths(oldPath, newPath);
 	emitLibraryChange("playlists:changed");
 }
 

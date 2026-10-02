@@ -14,9 +14,12 @@
 	import { closeEditModal } from "$ts/ui/editModal.svelte";
 	import { getPlaylist, reloadLibrary, reloadSingle } from "$ts/store/library.svelte";
 	import { deletePlaylist } from "$ts/audio/playlistManager.svelte";
+	import { artworkCache, artworkBytesCache, artworkColorCache } from "$ts/library/artworkLoader";
+	import type { Playlist } from "$ts/util/types";
 
 	let { uid } = $props<{ uid: string }>();
 
+	let playlistEntity = $state<Playlist | null>(null);
 	let title = $state("");
 	let description = $state("");
 	let owner = $state("");
@@ -27,6 +30,7 @@
 		const playlist = await getPlaylist(uid);
 		if (!playlist) return;
 
+		playlistEntity = playlist;
 		title = playlist.title ?? "";
 		description = playlist.description ?? "";
 		owner = playlist.owner ?? "";
@@ -44,7 +48,14 @@
 			};
 
 			await invoke("update_playlist_entry", { uid, update });
+
+			const cacheKey = `playlist:${uid}`;
+			artworkCache.delete(cacheKey);
+			artworkBytesCache.delete(cacheKey);
+			artworkColorCache.delete(cacheKey);
+
 			await reloadSingle(uid);
+			await reloadLibrary("playlists");
 		} finally {
 			saving = false;
 			closeEditModal();
@@ -61,6 +72,7 @@
 	<ArtworkEditor
 		entityType="playlist"
 		entityUid={uid}
+		entity={playlistEntity}
 		onchange={(path) => { artworkPath = path; }}
 	/>
 	<div class="space-y-1.5 mt-8">
