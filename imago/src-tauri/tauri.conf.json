@@ -58,7 +58,7 @@
 		"updater": {
 			"pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDNBMTc5MkRENDZERDk4QkEKUldTNm1OMUczWklYT3F1Y0lTZDQ0M0JCRDEwK3Jib0tmd3d6WWhaUG5UUkFha3pDb1hhanV5dHQK",
 			"endpoints": [
-				"https://github.com/PsychicSnailStudios/sonodex-dev/releases/latest/download/latest.json"
+				"https://github.com/PsychicSnailStudios/imago-dev/releases/latest/download/latest.json"
 			]
 		},
     "deep-link": {
