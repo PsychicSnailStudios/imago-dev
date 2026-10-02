@@ -200,7 +200,12 @@ pub fn remove_path(state: State<AppState>, path: String) -> Result<(), String> {
     });
 
     if let Some(ref luid) = lib_uid {
-        let lib_path = get_library_db_path(&uid, luid);
+        let lib_path = crate::db::library_registry::get_library_by_uid(&settings_conn, luid)
+			.ok()
+			.flatten()
+			.map(|l| std::path::PathBuf::from(l.file_path))
+			.unwrap_or_else(|| get_library_db_path(&uid, luid));
+        
         if let Ok(lib_conn) = Connection::open(&lib_path) {
             remove_path_from_lib_db(&lib_conn, &path).ok();
 
