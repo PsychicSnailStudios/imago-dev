@@ -9,6 +9,7 @@ import {
 	type PlaylistDefinition,
 	type PlaylistFilters,
 	type Rank,
+	type RankSpec,
 	type Refresh,
 } from "./explorePlaylistDefinitions";
 
@@ -185,8 +186,29 @@ function tieBreak(ctx: RankContext, a: Track, b: Track): number {
 	);
 }
 
-function rankTracks(ctx: RankContext, ranks: Rank[]): Track[] {
-	const scorers = ranks.map((rank) => rankers[rank](ctx));
+function parseRank(spec: RankSpec): { rank: Rank; invert: boolean } {
+	return spec.startsWith("-")
+		? { rank: spec.slice(1) as Rank, invert: true }
+		: { rank: spec as Rank, invert: false };
+}
+
+const zeroWhenUnplayed: Rank[] = ["rate", "totalTime", "consistency"];
+
+function buildScorer(ctx: RankContext, spec: RankSpec): Scorer {
+	const { rank, invert } = parseRank(spec);
+	const scorer = rankers[rank](ctx);
+	if (!invert) return scorer;
+	return (track) => {
+		const value = scorer(track);
+		if (value === null) {
+			return zeroWhenUnplayed.includes(rank) && !ctx.stats.has(track.uid) ? 0 : null;
+		}
+		return -value;
+	};
+}
+
+function rankTracks(ctx: RankContext, ranks: RankSpec[]): Track[] {
+	const scorers = ranks.map((spec) => buildScorer(ctx, spec));
 	const scored: { track: Track; values: number[] }[] = [];
 	for (const track of ctx.tracks) {
 		const values: number[] = [];
@@ -263,7 +285,7 @@ async function buildTracks(
 	const window = resolveRange(filters.scrobbleRange, now);
 	const unplayedWindow = resolveRange(filters.unplayedRange, now);
 
-	if (ranks.some((rank) => scrobbleRanks.includes(rank)) || window || unplayedWindow) {
+	if (ranks.some((spec) => scrobbleRanks.includes(parseRank(spec).rank)) || window || unplayedWindow) {
 		const scrobbles = await loadScrobbles();
 		stats = buildStats(scrobbles, window, minPlayMs);
 		if (window) tracks = tracks.filter((track) => stats.has(track.uid));
