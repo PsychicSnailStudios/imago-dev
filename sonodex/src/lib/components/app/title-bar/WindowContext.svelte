@@ -1,5 +1,8 @@
 <script lang="ts">
 
+	// IMPORTS
+	import { openUrl } from "@tauri-apps/plugin-opener";
+
 	// COMPONENTS
 	import { Ellipsis } from "lucide-svelte";
 
@@ -13,6 +16,9 @@
 	// APP FUNCTIONS
   
 	// FUNCTIONS
+	async function openHelp() {
+		await openUrl("https://github.com/PsychicSnailStudios/imago-dev/blob/main/docs/Help.md");
+	}
   
 </script>
 
@@ -25,6 +31,7 @@
 		<DropdownMenu.Group>
 			<DropdownMenu.Item onclick={() => {setView("settings");}}>Settings</DropdownMenu.Item>
 			<DropdownMenu.Item onclick={() => {setView("manage");}}>Manage Library</DropdownMenu.Item>
+			<DropdownMenu.Item onclick={() => {openHelp();}}>Help</DropdownMenu.Item>
 		</DropdownMenu.Group>
 	</DropdownMenu.Content>
 </DropdownMenu.Root>
