@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Trash, CloudDownload, FolderInput, Loader2 } from "lucide-svelte";
+	import { Trash, CloudDownload, FolderInput, Loader2, ChevronLeft, ChevronRight } from "lucide-svelte";
 
 	import * as Tabs from "$shadcn/tabs/index.js";
 	import * as Tooltip from "$shadcn/tooltip/index.js";
@@ -84,6 +84,22 @@
 		const u3 = onLibraryChange("artists:changed", loadArtists);
 		return () => { u1(); u2(); u3(); };
 	});
+
+	// ─── Track pagination ─────────────────────────────────────────────────────────
+	const TRACK_PAGE_SIZE = 500;
+	let trackPage = $state(0);
+
+	const trackPageCount = $derived(Math.max(1, Math.ceil(filteredTracks.length / TRACK_PAGE_SIZE)));
+	const currentTrackPage = $derived(Math.min(trackPage, trackPageCount - 1));
+	const trackPageOffset = $derived(currentTrackPage * TRACK_PAGE_SIZE);
+	const pagedTracks = $derived(filteredTracks.slice(trackPageOffset, trackPageOffset + TRACK_PAGE_SIZE));
+	const trackRangeEnd = $derived(trackPageOffset + pagedTracks.length);
+
+	$effect(() => { trackSearch; trackFilterMode; trackPage = 0; });
+
+	function goToTrackPage(p: number) {
+		trackPage = Math.max(0, Math.min(p, trackPageCount - 1));
+	}
 
 	// ─── Track selection derived ──────────────────────────────────────────────────
 	const selectedTrackUids = $derived(
@@ -247,6 +263,23 @@
 	}
 </script>
 
+{#snippet trackPager()}
+	{#if filteredTracks.length > TRACK_PAGE_SIZE}
+		<div class="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+			<span>{trackPageOffset + 1}–{trackRangeEnd} of {filteredTracks.length}</span>
+			<div class="flex items-center gap-2">
+				<Button variant="outline" size="icon" class="size-7" disabled={currentTrackPage === 0} onclick={() => goToTrackPage(currentTrackPage - 1)}>
+					<ChevronLeft class="w-4 h-4" />
+				</Button>
+				<span>Page {currentTrackPage + 1} of {trackPageCount}</span>
+				<Button variant="outline" size="icon" class="size-7" disabled={currentTrackPage >= trackPageCount - 1} onclick={() => goToTrackPage(currentTrackPage + 1)}>
+					<ChevronRight class="w-4 h-4" />
+				</Button>
+			</div>
+		</div>
+	{/if}
+{/snippet}
+
 <div class="flex flex-col gap-2 p-4 border-2 h-full w-full overflow-hidden rounded-md">
 	<h1 class="h1">Library Manager</h1>
 
@@ -331,8 +364,11 @@
 							</div>
 						{/if}
 
+						{@render trackPager()}
+
 						<div class="flex flex-col gap-2">
-							{#each filteredTracks as track, i (track.uid)}
+							{#each pagedTracks as track, localI (track.uid)}
+								{@const i = trackPageOffset + localI}
 								<TrackRow
 									{track}
 									selected={trackSelections[track.uid] ?? false}
@@ -341,6 +377,8 @@
 								/>
 							{/each}
 						</div>
+
+						{@render trackPager()}
 					</div>
 				</Tabs.Content>
 

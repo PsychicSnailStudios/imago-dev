@@ -54,7 +54,7 @@
 	</div>
 
 	<div class="flex-1 min-h-0 h-full">
-		<TrackTable tracks={filteredTracks} columns={cols} sort={view.sort} compact={view.compact} />
+		<TrackTable tracks={filteredTracks} columns={cols} sort={view.sort} compact={view.compact} pageSize={500} />
 	</div>
 
 </div>

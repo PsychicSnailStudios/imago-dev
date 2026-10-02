@@ -1,7 +1,8 @@
 <script lang="ts">
 	// COMPONENTS
-	import { Clock2, Star, ChevronUp, ChevronDown, ChevronsUpDown } from "lucide-svelte"
+	import { Clock2, Star, ChevronUp, ChevronDown, ChevronsUpDown, ChevronLeft, ChevronRight } from "lucide-svelte"
 	import * as ContextMenu from "$shadcn/context-menu/index.js";
+	import { Button } from "$shadcn/button/index.js";
 
 	// CUSTOM COMPONENTS
 	import TrackRow from "$lib/components/custom/track-table/TrackRow.svelte"
@@ -21,7 +22,7 @@
 	import type { Track } from "$ts/util/types"
 
 	// PROPS
-	let { tracks, columns, sort, compact = false, playlistUid = null, albumUid = null, emulateType = null } = $props<{
+	let { tracks, columns, sort, compact = false, playlistUid = null, albumUid = null, emulateType = null, pageSize = null } = $props<{
 		tracks: Track[];
 		columns: ColumnState;
 		sort: SortState;
@@ -29,6 +30,7 @@
 		playlistUid?: string | null;
 		albumUid?: string | null;
 		emulateType?: string | null;
+		pageSize?: number | null;
 	}>();
 
 	// VARIABLES
@@ -114,6 +116,16 @@
 		return m
 	})
 
+	// PAGINATION
+	let page = $state(0)
+	const pageCount = $derived(pageSize ? Math.max(1, Math.ceil(sortedTracks.length / pageSize)) : 1)
+	const currentPage = $derived(Math.min(page, pageCount - 1))
+	const pageOffset = $derived(pageSize ? currentPage * pageSize : 0)
+	const displayTracks = $derived(pageSize ? sortedTracks.slice(pageOffset, pageOffset + pageSize) : sortedTracks)
+	const showPagination = $derived(!!pageSize && sortedTracks.length > pageSize)
+	const rangeStart = $derived(sortedTracks.length === 0 ? 0 : pageOffset + 1)
+	const rangeEnd = $derived(pageOffset + displayTracks.length)
+
 	// VIRTUALIZATION — only used when albumUid is not set
 	const ROW_HEIGHT = $derived(compact ? 28 : 56)
 	const OVERSCAN = 10
@@ -122,13 +134,13 @@
 	let scrollContainer = $state<HTMLElement | null>(null)
 
 	const visibleRange = $derived.by(() => {
-		const total = sortedTracks.length
+		const total = displayTracks.length
 		const start = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN)
 		const end = Math.min(total, Math.ceil((scrollTop + containerHeight) / ROW_HEIGHT) + OVERSCAN)
 		return { start, end }
 	})
 
-	const totalHeight = $derived(sortedTracks.length * ROW_HEIGHT)
+	const totalHeight = $derived(displayTracks.length * ROW_HEIGHT)
 	const offsetY = $derived(visibleRange.start * ROW_HEIGHT)
 
 	let dragOverIndex = $state<number | null>(null)
@@ -149,7 +161,22 @@
 		return () => ro.disconnect()
 	})
 
+	$effect(() => {
+		void sort.field
+		void sort.direction
+		void tracks.length
+		page = 0
+		scrollTop = 0
+		if (scrollContainer) scrollContainer.scrollTop = 0
+	})
+
 	// FUNCTIONS
+	function goToPage(p: number) {
+		page = Math.max(0, Math.min(p, pageCount - 1))
+		scrollTop = 0
+		if (scrollContainer) scrollContainer.scrollTop = 0
+	}
+
 	function sortByNumber(a: Track, b: Track) {
 		if (playlistUid) return 0
 		return (parseAlbumEntries(a.albums)[0]?.track_number ?? 0) - (parseAlbumEntries(b.albums)[0]?.track_number ?? 0)
@@ -422,8 +449,8 @@
 					>
 						<div style="height: {totalHeight}px; position: relative;">
 							<div style="position: absolute; top: {offsetY}px; left: 0; right: 0;">
-								{#each sortedTracks.slice(visibleRange.start, visibleRange.end) as track, localI (track.uid)}
-									{@const i = visibleRange.start + localI}
+								{#each displayTracks.slice(visibleRange.start, visibleRange.end) as track, localI (track.uid)}
+									{@const i = pageOffset + visibleRange.start + localI}
 									<div
 										class="relative"
 										role="row"
@@ -474,5 +501,20 @@
 				<TrackContext track={ctxTrack} sourceUid={playlistUid ?? albumUid} />
 			{/if}
 		</ContextMenu.Root>
+	{/if}
+
+	{#if showPagination}
+		<div class="flex items-center justify-between gap-2 px-3 py-2 border-t shrink-0 text-xs text-muted-foreground">
+			<span>{rangeStart}–{rangeEnd} of {sortedTracks.length}</span>
+			<div class="flex items-center gap-2">
+				<Button variant="outline" size="icon" class="size-7" disabled={currentPage === 0} onclick={() => goToPage(currentPage - 1)}>
+					<ChevronLeft size={14} />
+				</Button>
+				<span>Page {currentPage + 1} of {pageCount}</span>
+				<Button variant="outline" size="icon" class="size-7" disabled={currentPage >= pageCount - 1} onclick={() => goToPage(currentPage + 1)}>
+					<ChevronRight size={14} />
+				</Button>
+			</div>
+		</div>
 	{/if}
 </div>
