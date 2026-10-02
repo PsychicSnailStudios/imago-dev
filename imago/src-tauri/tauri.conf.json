@@ -13,6 +13,7 @@
     "windows": [
       {
         "title": "Imago",
+        "visible": false,
         "width": 1500,
         "height": 900,
         "minWidth": 965,
