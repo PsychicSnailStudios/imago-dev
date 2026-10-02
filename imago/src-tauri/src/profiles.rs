@@ -59,7 +59,7 @@ pub fn get_analytics_db_path(uid: &str) -> PathBuf {
 }
 
 pub fn get_playlists_db_path(uid: &str) -> PathBuf {
-	get_profile_dir(uid).join("playlists.db")
+	get_user_dir(uid).join("playlists.db")
 }
 
 pub fn get_merged_db_path(uid: &str) -> PathBuf {
