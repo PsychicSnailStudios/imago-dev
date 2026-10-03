@@ -130,8 +130,8 @@
 			src={artworkThumb}
 			alt=""
 			class="absolute inset-0 w-full h-full object-cover"
-			style="filter: blur(4px); transform: scale(1.1);"
-		/>
+			/>
+			<!-- style="filter: blur(4px); transform: scale(1.1);" -->
 	{/if}
 
 	{#if artworkUrl}
