@@ -17,7 +17,7 @@ fn open_playlists_conn(profile_uid: &str) -> Connection {
 
 // Reads from playlists.db if it exists and has rows, otherwise falls back to lib.db.
 // This handles the transition period before a full migration is done.
-fn open_best_playlists_conn(profile_uid: &str) -> Connection {
+pub(crate) fn open_best_playlists_conn(profile_uid: &str) -> Connection {
     let playlists_path = get_playlists_db_path(profile_uid);
     if playlists_path.exists() {
         let conn = Connection::open(&playlists_path).expect("Failed to open playlists db");

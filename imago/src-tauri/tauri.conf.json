@@ -27,7 +27,7 @@
     ],
     "macOSPrivateApi": true,
 	"security": {
-	  "csp": "default-src 'self' ipc: http://ipc.localhost; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost blob: data:; media-src 'self' asset: http://asset.localhost blob: https:",
+	  "csp": "default-src 'self' ipc: http://ipc.localhost; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost artwork: http://artwork.localhost blob: data:; media-src 'self' asset: http://asset.localhost blob: https:",
 	  "assetProtocol": {
 	    "enable": true,
 	    "scope": {

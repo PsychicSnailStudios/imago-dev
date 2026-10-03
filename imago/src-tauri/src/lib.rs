@@ -1,3 +1,4 @@
+mod artwork;
 mod commands;
 mod connections;
 mod db;
@@ -205,6 +206,9 @@ pub fn run() {
 		.plugin(tauri_plugin_opener::init())
 		.plugin(tauri_plugin_clipboard_manager::init())
 		.manage(app_state)
+		.register_asynchronous_uri_scheme_protocol("artwork", |ctx, request, responder| {
+			artwork::handle(ctx.app_handle().clone(), request, responder);
+		})
 		.plugin(tauri_plugin_media::init())
 		.plugin(tauri_plugin_log::Builder::new().build())
 		.plugin(tauri_plugin_dialog::init())
@@ -313,6 +317,7 @@ pub fn run() {
 		.invoke_handler(tauri::generate_handler![
 			open_in_explorer,
 			quit_app,
+			artwork::clear_artwork_cache,
 			// Profiles
 			commands::profiles::needs_profile_setup,
 			commands::profiles::get_profiles,

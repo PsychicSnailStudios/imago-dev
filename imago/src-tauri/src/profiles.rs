@@ -48,6 +48,10 @@ pub fn get_settings_db_path(uid: &str) -> PathBuf {
 	get_user_dir(uid).join("settings.db")
 }
 
+pub fn get_artwork_cache_dir(uid: &str) -> PathBuf {
+	get_profile_dir(uid).join("artwork_cache")
+}
+
 // Legacy — still used by existing commands that haven't been migrated yet.
 // Points to lib.db in the profile root. Will be removed once migration is complete.
 pub fn get_lib_db_path(uid: &str) -> PathBuf {

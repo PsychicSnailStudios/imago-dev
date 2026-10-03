@@ -31,6 +31,7 @@
 {#if entity}
 <button
 	class="w-full text-left flex flex-col gap-2 p-2 rounded-md bg-background border hover:border-primary transition-colors cursor-default justify-start group"
+	style="content-visibility: auto; contain-intrinsic-height: auto 260px;"
 	onclick={() => setSelection(entity.uid)}
 >
 	<div class="relative w-full">

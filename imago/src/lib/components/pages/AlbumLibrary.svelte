@@ -2,9 +2,9 @@
 	import { ArrowUpDown, ArrowUp, ArrowDown, LayoutGrid, List } from "lucide-svelte";
 
 	import * as DropdownMenu from "$shadcn/dropdown-menu/index.js";
-	import { ScrollArea } from "$shadcn/scroll-area/index.js";
 	import { Button } from "$shadcn/button/index.js";
 
+	import ScrollView from "$lib/components/custom/ScrollView.svelte";
 	import AudioCard from "$lib/components/custom/cards/AudioCard.svelte";
 	import ArtworkDisplay from "$lib/components/custom/ArtworkDisplay.svelte";
 	import SearchBar from "$lib/components/custom/search/SearchBar.svelte";
@@ -147,7 +147,7 @@
 	</div>
 
 	<div class="flex flex-col h-full w-full overflow-hidden gap-3 p-0.5">
-		<ScrollArea class="min-h-0 min-w-0 pr-2">
+		<ScrollView class="min-h-0 min-w-0 pr-2">
 		{#if view.compact}
 			<div class="pr-4 pl-4 pb-4">
 				{#each filteredAlbums as album}
@@ -171,6 +171,6 @@
 				{/each}
 			</MediaGrid>
 		{/if}
-		</ScrollArea>
+		</ScrollView>
 	</div>
 </div>
