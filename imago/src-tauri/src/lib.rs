@@ -12,7 +12,7 @@ mod watcher;
 use crate::connections::{lastfm_auth, spotify_auth};
 use crate::db::{get_library_paths, init_lib_db, init_settings_db};
 use crate::profiles::{
-	get_lib_db_path, get_library_db_path, get_local_library_db_path, get_settings_db_path,
+	get_lib_db_path, get_library_db_path, get_user_dir, get_local_library_db_path, get_settings_db_path,
 	read_registry,
 };
 use rusqlite::Connection;
@@ -30,7 +30,7 @@ pub fn open_settings_conn(uid: &str) -> Connection {
 }
 
 pub fn open_analytics_conn(uid: &str) -> Result<Connection, rusqlite::Error> {
-	let path = crate::profiles::get_profile_dir(uid).join("analytics.db");
+	let path = crate::profiles::get_user_dir(uid).join("analytics.db");
 	let conn = Connection::open(path)?;
 	db::analytics_manager::init_analytics_db(&conn)?;
 	Ok(conn)
