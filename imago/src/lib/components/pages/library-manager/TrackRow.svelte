@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { Pencil, Trash, CloudDownload, Loader2 } from "lucide-svelte";
-	import * as Tooltip from "$shadcn/tooltip/index.js";
 	import { buttonVariants } from "$shadcn/button/index.js";
 	import { Checkbox } from "$shadcn/checkbox/index.js";
 	import ArtworkDisplay from "$lib/components/custom/ArtworkDisplay.svelte";
@@ -57,13 +56,13 @@
 	}
 </script>
 
-<div class="flex gap-2 items-center">
-	<Checkbox
+<div class="flex gap-2 items-center" style="content-visibility: auto; contain-intrinsic-size: auto 60px;">
+	<!-- <Checkbox
 		checked={selected}
 		onCheckedChange={(v) => {
 			if (v !== selected) onToggle?.();
 		}}
-	/>
+	/> -->
 	<!-- svelte-ignore a11y_interactive_supports_focus -->
 	<!-- svelte-ignore a11y_click_events_have_key_events -->
 	<div
@@ -104,40 +103,37 @@
 
 		{#if !selected}
 			<div class="flex gap-2 shrink-0">
-				<Tooltip.Root>
-					<Tooltip.Trigger
-						class={buttonVariants({ variant: "destructive", size: "icon" })}
-						onclick={(e: MouseEvent) => { e.stopPropagation(); removeTrackFromLibrary(track.uid); }}
-					>
-						<Trash />
-					</Tooltip.Trigger>
-					<Tooltip.Content><p>Delete track record</p></Tooltip.Content>
-				</Tooltip.Root>
+				<button
+					type="button"
+					title="Delete track record"
+					class={buttonVariants({ variant: "destructive", size: "icon" })}
+					onclick={(e: MouseEvent) => { e.stopPropagation(); removeTrackFromLibrary(track.uid); }}
+				>
+					<Trash />
+				</button>
 
-				<Tooltip.Root>
-					<Tooltip.Trigger
-						class={buttonVariants({ variant: "outline", size: "icon" })}
-						onclick={handleEnrich}
-						disabled={enriching}
-					>
-						{#if enriching}
-							<Loader2 class="animate-spin" />
-						{:else}
-							<CloudDownload />
-						{/if}
-					</Tooltip.Trigger>
-					<Tooltip.Content><p>Fetch metadata via API</p></Tooltip.Content>
-				</Tooltip.Root>
+				<button
+					type="button"
+					title="Fetch metadata via API"
+					class={buttonVariants({ variant: "outline", size: "icon" })}
+					onclick={handleEnrich}
+					disabled={enriching}
+				>
+					{#if enriching}
+						<Loader2 class="animate-spin" />
+					{:else}
+						<CloudDownload />
+					{/if}
+				</button>
 
-				<Tooltip.Root>
-					<Tooltip.Trigger
-						class={buttonVariants({ variant: "outline", size: "icon" })}
-						onclick={(e: MouseEvent) => { e.stopPropagation(); openEditModal({ type: "track", uid: track.uid }); }}
-					>
-						<Pencil />
-					</Tooltip.Trigger>
-					<Tooltip.Content><p>Edit track</p></Tooltip.Content>
-				</Tooltip.Root>
+				<button
+					type="button"
+					title="Edit track"
+					class={buttonVariants({ variant: "outline", size: "icon" })}
+					onclick={(e: MouseEvent) => { e.stopPropagation(); openEditModal({ type: "track", uid: track.uid }); }}
+				>
+					<Pencil />
+				</button>
 			</div>
 		{/if}
 	</div>
