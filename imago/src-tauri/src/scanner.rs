@@ -57,6 +57,93 @@ fn split_on_delimiters(input: &str, delimiters: &[&str]) -> Vec<String> {
     results
 }
 
+fn find_feat_marker(s: &str) -> Option<(usize, usize)> {
+	let lower = s.to_ascii_lowercase();
+	let bytes = lower.as_bytes();
+	let mut best: Option<(usize, usize)> = None;
+
+	for marker in ["featuring", "feat", "ft"] {
+		let mut from = 0;
+		while let Some(rel) = lower[from..].find(marker) {
+			let start = from + rel;
+			from = start + marker.len();
+
+			if start > 0 && bytes[start - 1].is_ascii_alphanumeric() {
+				continue;
+			}
+
+			let mut end = start + marker.len();
+			let has_dot = bytes.get(end) == Some(&b'.');
+			if has_dot {
+				end += 1;
+			}
+			let boundary_ok = has_dot
+				|| end >= bytes.len()
+				|| matches!(bytes[end], b' ' | b':' | b')' | b']');
+			if !boundary_ok {
+				continue;
+			}
+
+			if best.map(|(b, _)| start < b).unwrap_or(true) {
+				best = Some((start, end));
+			}
+			break;
+		}
+	}
+
+	best
+}
+
+fn strip_unbalanced(s: &str) -> String {
+	let mut t = s.trim().to_string();
+	for (open, close) in [('(', ')'), ('[', ']')] {
+		if t.starts_with(open) && !t.contains(close) {
+			t.remove(0);
+		}
+		if t.ends_with(close) && !t.contains(open) {
+			t.pop();
+		}
+		if t.ends_with(open) {
+			t.pop();
+		}
+		if t.starts_with(close) {
+			t.remove(0);
+		}
+		t = t.trim().to_string();
+	}
+	t
+}
+
+fn split_feat_markers(input: &str) -> Vec<String> {
+	let mut parts: Vec<String> = Vec::new();
+	let mut rest = input.to_string();
+	while let Some((start, end)) = find_feat_marker(&rest) {
+		parts.push(rest[..start].to_string());
+		rest = rest[end..].to_string();
+	}
+	parts.push(rest);
+	parts
+}
+
+fn split_artists(input: &str, delimiters: &[&str]) -> Vec<String> {
+	let mut out: Vec<String> = Vec::new();
+	for part in split_feat_markers(input) {
+		for piece in split_on_delimiters(&part, delimiters) {
+			let cleaned = strip_unbalanced(&piece);
+			if cleaned.is_empty() {
+				continue;
+			}
+			if !out.iter().any(|e| e.eq_ignore_ascii_case(&cleaned)) {
+				out.push(cleaned);
+			}
+		}
+	}
+	if out.is_empty() && !input.trim().is_empty() {
+		out.push(input.trim().to_string());
+	}
+	out
+}
+
 fn normalize_rating(raw: &str) -> Option<f32> {
     let val = raw.trim().parse::<f32>().ok()?;
     if val <= 10.0 {
@@ -106,33 +193,21 @@ fn try_parse_ampersand(artists: Vec<String>) -> Vec<String> {
 }
 
 fn extract_feat_artists(title: &str) -> Vec<String> {
-    let lower = title.to_lowercase();
-    let patterns = ["feat.", "ft.", "featuring"];
-
-    for pat in &patterns {
-        if let Some(pos) = lower.find(pat) {
-            let after_pat = &title[pos + pat.len()..];
-            let raw = after_pat
-                .trim_start_matches(|c: char| c == '.' || c == ' ')
-                .trim_end_matches(')')
-                .trim_end_matches(']')
-                .trim();
-            let parts: Vec<String> = raw
-                .split(&[',', '&', '/'][..])
-                .map(|p| {
-                    p.trim()
-                        .trim_matches(|c| c == '(' || c == '[' || c == ')' || c == ']')
-                        .trim()
-                        .to_string()
-                })
-                .filter(|p| !p.is_empty())
-                .collect();
-            if !parts.is_empty() {
-                return parts;
-            }
-        }
-    }
-    Vec::new()
+	let Some((_, end)) = find_feat_marker(title) else {
+		return Vec::new();
+	};
+	let after = &title[end..];
+	let mut cut = after.len();
+	for stop in [")", "]", " - "] {
+		if let Some(pos) = after.find(stop) {
+			cut = cut.min(pos);
+		}
+	}
+	after[..cut]
+		.split(&[',', '&', '/'][..])
+		.map(|p| strip_unbalanced(p))
+		.filter(|p| !p.is_empty())
+		.collect()
 }
 
 fn is_verified_folder_structure(path: &Path) -> bool {
@@ -753,13 +828,13 @@ pub fn read_track_with_settings(
 
     let tag_artists: Option<Vec<String>> = tag_artist
         .as_deref()
-        .map(|s| split_on_delimiters(s, artist_tag_delimiters));
+        .map(|s| split_artists(s, artist_tag_delimiters));
 
     let filename_artists: Option<Vec<String>> = filename_meta
         .artist
         .as_deref()
         .filter(|s| !s.trim().is_empty())
-        .map(|s| split_on_delimiters(s, artist_filename_delimiters));
+        .map(|s| split_artists(s, artist_filename_delimiters));
 
     let has_tag_artist = tag_artist.is_some();
     let has_filename_artist = filename_meta
@@ -774,7 +849,7 @@ pub fn read_track_with_settings(
                 .artist
                 .as_deref()
                 .filter(|s| !s.trim().is_empty())
-                .map(|s| split_on_delimiters(s, artist_tag_delimiters))
+                .map(|s| split_artists(s, artist_tag_delimiters))
         } else {
             None
         };
@@ -819,7 +894,7 @@ pub fn read_track_with_settings(
 
     // Resolve album_artist name (plain string at this stage)
     let album_artist_split: Option<Vec<String>> = tag_album_artist.as_deref().map(|s| {
-        let parts = split_on_delimiters(s, artist_tag_delimiters);
+        let parts = split_artists(s, artist_tag_delimiters);
         if try_ampersand {
             try_parse_ampersand(parts)
         } else {

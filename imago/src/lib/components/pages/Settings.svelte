@@ -1,9 +1,7 @@
 <script lang="ts">
 	import { invoke } from "@tauri-apps/api/core";
-	import { listen } from "@tauri-apps/api/event";
 	import { onMount } from "svelte";
 	import { ScrollArea } from "$shadcn/scroll-area/index.js";
-	import { scanState } from "$ts/store/session.svelte";
 	import { loadEqSettings } from "$ts/store/eqStore.svelte";
 
 	import * as Tabs from "$shadcn/tabs/index.js";
@@ -33,19 +31,6 @@
 		(async () => {
 			await loadSettings();
 			await loadEqSettings();
-
-			await listen("enrich:progress", (event: any) => {
-				scanState.enriching = true;
-				scanState.enrichDone = event.payload.done;
-				scanState.enrichTotal = event.payload.total;
-				scanState.enrichErrors = event.payload.errors;
-			});
-
-			await listen("enrich:done", (event: any) => {
-				scanState.enriching = false;
-				scanState.enrichErrors = event.payload.errors;
-				scanState.status = `Enrichment done. ${event.payload.total - event.payload.errors} updated, ${event.payload.errors} not found.`;
-			});
 		})();
 	});
 

@@ -26,6 +26,7 @@ export const scanState = $state({
 	total: 0,
 	status: "",
 	enriching: false,
+	enrichStage: "",
 	enrichDone: 0,
 	enrichTotal: 0,
 	enrichErrors: 0,

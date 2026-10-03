@@ -27,7 +27,7 @@
 	import ProfileSetup from "$lib/components/dialogs/profile/ProfileSetup.svelte";
 	import UpdateDialog from "$lib/components/dialogs/UpdateDialog.svelte";
 
-	import { loadLibrary } from "$ts/store/library.svelte";
+	import { loadLibrary, reloadLibrary } from "$ts/store/library.svelte";
 	import { selection, scanState, activeView, loadSessionState, saveSessionState } from "$ts/store/session.svelte";
 	import { dragState } from "$ts/store/drag.svelte";
 	import { togglePlay, skipBack, skipNext, loadPlayerState, savePlayerState } from "$ts/audio/audioManager.svelte";
@@ -39,6 +39,8 @@
 
 	let update = $state<import("@tauri-apps/plugin-updater").Update | null>(null);
 	let showUpdateDialog = $state(false);
+
+	let libraryRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 
 	let containerWidth = $state(0);
 	let minViewWidth = $derived(containerWidth ? (375 / containerWidth) * 100 : 15);
@@ -78,6 +80,50 @@
 			if (uid) loadSessionState(uid);
 			await loadLibrary();
 			setExplorePlaylists();
+		});
+
+		await listen("scan:progress", (event: any) => {
+			scanState.loading = true;
+			scanState.progress = event.payload.scanned;
+			scanState.total = event.payload.total;
+			scanState.status = `Scanning… ${scanState.progress} / ${scanState.total}`;
+		});
+
+		await listen("scan:done", () => {
+			scanState.status = "Scan done.";
+			scanState.loading = false;
+			scanState.progress = 0;
+			scanState.total = 0;
+		});
+
+		await listen("scan:error", (event: any) => {
+			scanState.status = `Scan error: ${event.payload}`;
+			scanState.loading = false;
+		});
+
+		await listen("enrich:progress", (event: any) => {
+			scanState.enriching = true;
+			scanState.enrichStage = event.payload.stage ?? "";
+			scanState.enrichDone = event.payload.done;
+			scanState.enrichTotal = event.payload.total;
+			scanState.enrichErrors = event.payload.errors;
+		});
+
+		await listen("enrich:done", (event: any) => {
+			scanState.enriching = false;
+			scanState.enrichErrors = event.payload.errors;
+			scanState.status = `Enrichment done. ${event.payload.total - event.payload.errors} updated, ${event.payload.errors} not found.`;
+		});
+
+		await listen("library:updated", () => {
+			if (libraryRefreshTimer) clearTimeout(libraryRefreshTimer);
+			libraryRefreshTimer = setTimeout(() => {
+				libraryRefreshTimer = null;
+				reloadLibrary("tracks");
+				reloadLibrary("albums");
+				reloadLibrary("artists");
+				reloadLibrary("lyrics");
+			}, 500);
 		});
 
 		window.addEventListener("keydown", keydown);
@@ -141,7 +187,7 @@
 								style="width: {Math.round((scanState.enrichDone / scanState.enrichTotal) * 100)}%"
 							></div>
 						</div>
-						<p class="text-xs text-muted-foreground">Enriching {scanState.enrichDone} / {scanState.enrichTotal}</p>
+						<p class="text-xs text-muted-foreground">Enriching {scanState.enrichStage} {scanState.enrichDone} / {scanState.enrichTotal}</p>
 					</div>
 				{/if}
 			</div>
