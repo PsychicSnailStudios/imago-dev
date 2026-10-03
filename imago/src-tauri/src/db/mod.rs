@@ -220,6 +220,8 @@ pub fn init_library_db(conn: &Connection) -> Result<()> {
 
 		CREATE INDEX IF NOT EXISTS idx_tracks_album_artist ON tracks(album_artist);
 		CREATE INDEX IF NOT EXISTS idx_tracks_path ON tracks(path);
+		CREATE INDEX IF NOT EXISTS idx_tracks_remote_path ON tracks(remote_path);
+		CREATE INDEX IF NOT EXISTS idx_tracks_title_norm ON tracks(LOWER(TRIM(title)));
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_tracks_uid ON tracks(uid);
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_albums_uid ON albums(uid);
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_artists_uid ON artists(uid);

@@ -54,6 +54,43 @@ fn get_lib_uid_for_path(settings_conn: &Connection, path: &str) -> Option<String
         .flatten()
 }
 
+fn spawn_post_scan_tasks(app: AppHandle, profile_uid: String) {
+	let settings_conn = open_settings_conn(&profile_uid);
+	let flag = |key: &str| -> bool {
+		crate::db::get_setting(&settings_conn, key)
+			.ok()
+			.flatten()
+			.map(|v| v == "true")
+			.unwrap_or(false)
+	};
+	let auto_tracks = flag("auto_enrich_tracks");
+	let auto_albums = flag("auto_enrich_albums");
+	let auto_artists = flag("auto_enrich_artists");
+	let auto_lyrics = flag("auto_fetch_lyrics");
+
+	if !(auto_tracks || auto_albums || auto_artists || auto_lyrics) {
+		return;
+	}
+
+	tauri::async_runtime::spawn(async move {
+		let state = app.state::<AppState>();
+		if auto_tracks {
+			let _ = crate::commands::enrichment::enrich_all(app.clone(), state.clone()).await;
+		}
+		if auto_albums {
+			let _ =
+				crate::commands::enrichment::enrich_all_albums(app.clone(), state.clone()).await;
+		}
+		if auto_artists {
+			let _ =
+				crate::commands::enrichment::enrich_all_artists(app.clone(), state.clone()).await;
+		}
+		if auto_lyrics {
+			crate::commands::lyrics::fetch_missing_lyrics(app.clone(), profile_uid.clone()).await;
+		}
+	});
+}
+
 #[tauri::command]
 pub fn add_path(
     app: AppHandle,
@@ -113,48 +150,7 @@ pub fn add_path(
 
         let _ = library_manager::incremental_update(&uid_clone, &[lib_uid_clone.clone()]);
 
-        let settings_conn2 = open_settings_conn(&uid_clone);
-        let auto_tracks = crate::db::get_setting(&settings_conn2, "auto_enrich_tracks")
-            .ok()
-            .flatten()
-            .map(|v| v == "true")
-            .unwrap_or(false);
-        let auto_albums = crate::db::get_setting(&settings_conn2, "auto_enrich_albums")
-            .ok()
-            .flatten()
-            .map(|v| v == "true")
-            .unwrap_or(false);
-        let auto_artists = crate::db::get_setting(&settings_conn2, "auto_enrich_artists")
-            .ok()
-            .flatten()
-            .map(|v| v == "true")
-            .unwrap_or(false);
-
-        if auto_tracks || auto_albums || auto_artists {
-            let app_enrich = app_clone.clone();
-            tauri::async_runtime::spawn(async move {
-                let state = app_enrich.state::<AppState>();
-                if auto_tracks {
-                    let _ =
-                        crate::commands::enrichment::enrich_all(app_enrich.clone(), state.clone())
-                            .await;
-                }
-                if auto_albums {
-                    let _ = crate::commands::enrichment::enrich_all_albums(
-                        app_enrich.clone(),
-                        state.clone(),
-                    )
-                    .await;
-                }
-                if auto_artists {
-                    let _ = crate::commands::enrichment::enrich_all_artists(
-                        app_enrich.clone(),
-                        state.clone(),
-                    )
-                    .await;
-                }
-            });
-        }
+		spawn_post_scan_tasks(app_clone.clone(), uid_clone.clone());
 
         let all_paths: Vec<String> = {
             if let Ok(lc) = Connection::open(&lib_file_path_clone) {
@@ -294,6 +290,8 @@ pub fn rescan(app: AppHandle, state: State<AppState>) -> Result<(), String> {
     let all_libs = crate::db::library_registry::get_all_libraries(&settings_conn)
         .map_err(|e| e.to_string())?;
 
+	let mut handles = Vec::new();
+
     for lib in all_libs {
         let lib_file_path = lib.file_path.clone();
         let lib_uid = lib.uid.clone();
@@ -316,8 +314,8 @@ pub fn rescan(app: AppHandle, state: State<AppState>) -> Result<(), String> {
             continue;
         }
 
-        let paths_clone = paths.clone();
-        std::thread::spawn(move || {
+		let paths_clone = paths.clone();
+		let handle = std::thread::spawn(move || {
             let lib_conn = Connection::open(&lib_file_path).expect("Failed to open library db");
             let settings_path = get_settings_db_path(&uid_clone);
             lib_conn
@@ -334,7 +332,21 @@ pub fn rescan(app: AppHandle, state: State<AppState>) -> Result<(), String> {
             let _ = library_manager::incremental_update(&uid_clone, &[lib_uid.clone()]);
             crate::watcher::start_watcher(app_clone, uid_clone, lib_uid, paths_clone);
         });
+		handles.push(handle);
     }
+
+	if handles.is_empty() {
+		return Ok(());
+	}
+
+	let app_done = app.clone();
+	let uid_done = uid.clone();
+	std::thread::spawn(move || {
+		for handle in handles {
+			let _ = handle.join();
+		}
+		spawn_post_scan_tasks(app_done, uid_done);
+	});
 
     Ok(())
 }

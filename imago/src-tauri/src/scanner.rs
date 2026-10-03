@@ -1,6 +1,6 @@
 use crate::db::{
-    create_album, create_artist, first_album_name, generate_uid, get_all_albums, get_all_artists,
-    get_setting, resolved_artist_name, update_album, update_track_metadata_by_uid, upsert_track,
+    create_album, create_artist, generate_uid, get_all_albums, get_all_artists,
+    get_setting, update_album, update_track_metadata_by_uid, upsert_track,
     Album, AlbumUpdate, Artist, MetadataUpdate, Track,
 };
 use lofty::file::AudioFile;
@@ -1464,21 +1464,6 @@ pub fn scan_directory_with_progress(conn: &Connection, dir: &str, app: &AppHandl
         .flatten()
         .map(|v| v == "true")
         .unwrap_or(true);
-    let auto_enrich_tracks = get_setting(conn, "auto_enrich_tracks")
-        .ok()
-        .flatten()
-        .map(|v| v == "true")
-        .unwrap_or(false);
-    let auto_enrich_albums = get_setting(conn, "auto_enrich_albums")
-        .ok()
-        .flatten()
-        .map(|v| v == "true")
-        .unwrap_or(false);
-    let auto_fetch_lyrics = get_setting(conn, "auto_fetch_lyrics")
-        .ok()
-        .flatten()
-        .map(|v| v == "true")
-        .unwrap_or(false);
 
     let artist_tag_delimiters_owned: Vec<String> = get_setting(conn, "artist_tag_delimiters")
         .ok()
@@ -1533,66 +1518,6 @@ pub fn scan_directory_with_progress(conn: &Connection, dir: &str, app: &AppHandl
         .unwrap_or_else(|| GENRE_DELIMITERS.iter().map(|s| s.to_string()).collect());
     let genre_delimiters: Vec<&str> = genre_delimiters_owned.iter().map(|s| s.as_str()).collect();
 
-    let enrich_settings: Option<crate::enrichment::EnrichSettings> =
-        if auto_enrich_tracks || auto_enrich_albums {
-            Some(crate::enrichment::EnrichSettings {
-                primary_api: get_setting(conn, "enrich_primary_api")
-                    .ok()
-                    .flatten()
-                    .unwrap_or_else(|| "musicbrainz".to_string()),
-                lastfm_key: get_setting(conn, "api_lastfm_key")
-                    .ok()
-                    .flatten()
-                    .unwrap_or_default(),
-                discogs_key: get_setting(conn, "api_discogs_key")
-                    .ok()
-                    .flatten()
-                    .unwrap_or_default(),
-                audiodb_key: get_setting(conn, "api_audiodb_key")
-                    .ok()
-                    .flatten()
-                    .unwrap_or_default(),
-                priority_title: get_setting(conn, "enrich_priority_title")
-                    .ok()
-                    .flatten()
-                    .unwrap_or_else(|| "local".to_string()),
-                priority_artists: get_setting(conn, "enrich_priority_artists")
-                    .ok()
-                    .flatten()
-                    .unwrap_or_else(|| "local".to_string()),
-                priority_album_artist: get_setting(conn, "enrich_priority_album_artist")
-                    .ok()
-                    .flatten()
-                    .unwrap_or_else(|| "local".to_string()),
-                priority_album: get_setting(conn, "enrich_priority_album")
-                    .ok()
-                    .flatten()
-                    .unwrap_or_else(|| "local".to_string()),
-                priority_year: get_setting(conn, "enrich_priority_year")
-                    .ok()
-                    .flatten()
-                    .unwrap_or_else(|| "local".to_string()),
-                priority_genres: get_setting(conn, "enrich_priority_genres")
-                    .ok()
-                    .flatten()
-                    .unwrap_or_else(|| "local".to_string()),
-                priority_bpm: get_setting(conn, "enrich_priority_bpm")
-                    .ok()
-                    .flatten()
-                    .unwrap_or_else(|| "local".to_string()),
-                priority_key: get_setting(conn, "enrich_priority_key")
-                    .ok()
-                    .flatten()
-                    .unwrap_or_else(|| "local".to_string()),
-                priority_artwork: get_setting(conn, "enrich_priority_artwork")
-                    .ok()
-                    .flatten()
-                    .unwrap_or_else(|| "local".to_string()),
-            })
-        } else {
-            None
-        };
-
     let all_files: Vec<_> = WalkDir::new(dir)
         .follow_links(true)
         .into_iter()
@@ -1608,13 +1533,6 @@ pub fn scan_directory_with_progress(conn: &Connection, dir: &str, app: &AppHandl
         serde_json::json!({ "scanned": 0, "total": total }),
     )
     .ok();
-
-    let rt = tokio::runtime::Runtime::new().ok();
-    let http_client = if auto_enrich_tracks || auto_enrich_albums || auto_fetch_lyrics {
-        crate::enrichment::make_client().ok()
-    } else {
-        None
-    };
 
     // Pre-load album and artist caches from existing DB records to avoid per-track full table scans
     let mut album_cache: AlbumCache = {
@@ -1649,12 +1567,10 @@ pub fn scan_directory_with_progress(conn: &Connection, dir: &str, app: &AppHandl
             .collect()
     };
 
-    let mut scanned_album_uids: Vec<String> = Vec::new();
-
     conn.execute_batch("BEGIN DEFERRED").ok();
 
     for entry in all_files {
-        if let Some(mut track) = read_track_with_settings(
+        if let Some(track) = read_track_with_settings(
             entry.path(),
             &priority_title,
             &priority_artist,
@@ -1677,50 +1593,6 @@ pub fn scan_directory_with_progress(conn: &Connection, dir: &str, app: &AppHandl
                     .ok();
                 }
                 continue;
-            }
-
-            if auto_enrich_tracks {
-                if let (Some(ref settings), Some(ref client), Some(ref rt)) =
-                    (&enrich_settings, &http_client, &rt)
-                {
-                    let track_input = crate::enrichment::TrackInput {
-                        id: 0,
-                        title: track.title.clone(),
-                        artists: track.artists.clone(),
-                        album_artist: track.album_artist.clone(),
-                        albums: track.albums.clone(),
-                        year: track.year.clone(),
-                        genres: track.genres.clone(),
-                        bpm: track.bpm,
-                        key: track.key.clone(),
-                        existing_artwork: track.artwork_blob.clone(),
-                    };
-
-                    if let Ok(result) = rt.block_on(crate::enrichment::enrich_track_async(
-                        client,
-                        &track_input,
-                        settings,
-                        None,
-                    )) {
-                        track.title = result.title.or(track.title);
-                        if let Some(enriched_artists) = result.artists {
-                            track.artists = Some(enriched_artists);
-                        }
-                        if let Some(enriched_aa) = result.album_artist {
-                            track.album_artist = Some(enriched_aa);
-                        }
-                        if let Some(albums_str) = result.albums {
-                            track.albums = Some(albums_str);
-                        }
-                        track.year = result.year.or(track.year);
-                        if let Some(genres_str) = result.genres {
-                            track.genres = Some(genres_str);
-                        }
-                        track.bpm = result.bpm.or(track.bpm);
-                        track.key = result.key.or(track.key);
-                        track.artwork_blob = result.artwork.or(track.artwork_blob);
-                    }
-                }
             }
 
             if upsert_track(conn, &track).is_ok() {
@@ -1775,64 +1647,6 @@ pub fn scan_directory_with_progress(conn: &Connection, dir: &str, app: &AppHandl
                         );
                     }
                 }
-
-                if auto_enrich_albums {
-                    if let Some(entries) = track
-                        .albums
-                        .as_deref()
-                        .and_then(|s| serde_json::from_str::<Vec<serde_json::Value>>(s).ok())
-                    {
-                        for entry in entries {
-                            if let Some(uid) = entry.get("uid").and_then(|u| u.as_str()) {
-                                if !uid.is_empty() && !scanned_album_uids.contains(&uid.to_string())
-                                {
-                                    scanned_album_uids.push(uid.to_string());
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if auto_fetch_lyrics {
-                    if let (Some(ref client), Some(ref rt)) = (&http_client, &rt) {
-                        let title = track.title.as_deref().unwrap_or("").to_string();
-                        let artist = resolved_artist_name(&track.album_artist, &track.artists)
-                            .unwrap_or_default();
-                        let album = first_album_name(&track.albums);
-                        let duration_secs = track.duration_ms.map(|ms| (ms / 1000) as u64);
-
-                        if !title.is_empty() && !artist.is_empty() {
-                            if let Some(lyrics) =
-                                rt.block_on(crate::enrichment::lyrics::fetch_lyrics(
-                                    client,
-                                    &title,
-                                    &artist,
-                                    album.as_deref(),
-                                    duration_secs,
-                                ))
-                            {
-                                let track_id = crate::db::get_track_by_uid(conn, &track.uid)
-                                    .ok()
-                                    .flatten()
-                                    .and_then(|t| t.id);
-                                if let Some(id) = track_id {
-                                    let _ = crate::db::upsert_lyrics(
-                                        conn,
-                                        &crate::db::Lyrics {
-                                            id: None,
-                                            track_uid: String::new(),
-                                            track_id: id,
-                                            source: lyrics.source,
-                                            plain: lyrics.plain,
-                                            synced: lyrics.synced,
-                                            instrumental: lyrics.instrumental,
-                                        },
-                                    );
-                                }
-                            }
-                        }
-                    }
-                }
             }
         }
 
@@ -1847,46 +1661,6 @@ pub fn scan_directory_with_progress(conn: &Connection, dir: &str, app: &AppHandl
     }
 
     conn.execute_batch("COMMIT").ok();
-
-    if auto_enrich_albums && !scanned_album_uids.is_empty() {
-        if let (Some(ref settings), Some(ref client), Some(ref rt)) =
-            (&enrich_settings, &http_client, &rt)
-        {
-            let albums = crate::db::get_all_albums(conn).unwrap_or_default();
-            for album_uid in &scanned_album_uids {
-                if let Some(album) = albums.iter().find(|a| &a.uid == album_uid) {
-                    let artist = resolved_artist_name(&album.album_artist, &album.artists);
-
-                    if let Some(artist) = artist {
-                        let result = rt.block_on(crate::enrichment::enrich_album_async(
-                            client,
-                            &album.title,
-                            &artist,
-                            settings,
-                            None,
-                        ));
-                        let update = AlbumUpdate {
-                            title: None,
-                            format: result.format,
-                            rating: None,
-                            artists: None,
-                            album_artist: None,
-                            release_date: result.release_date,
-                            tags: None,
-                            genres: result.genres,
-                            tracks: None,
-                            credits: result.description,
-                            label: result.label,
-                            artwork_blob: result.artwork,
-                            artwork_path: None,
-                            emulate_type: None,
-                        };
-                        let _ = crate::db::update_album_by_uid(conn, album_uid, &update);
-                    }
-                }
-            }
-        }
-    }
 
     let duplicates = crate::db::find_duplicates(conn).unwrap_or_default();
     if !duplicates.is_empty() {

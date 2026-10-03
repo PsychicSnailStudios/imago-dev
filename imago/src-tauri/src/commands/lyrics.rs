@@ -127,3 +127,103 @@ pub fn delete_track_lyrics(state: State<AppState>, uid: String) -> Result<(), St
     }
     Ok(())
 }
+
+pub async fn fetch_missing_lyrics(app: AppHandle, profile_uid: String) {
+	let candidates: Vec<(String, String, String, Option<String>, Option<u64>)> = {
+		let conn = open_merged_conn(&profile_uid);
+		db::get_all_tracks(&conn)
+			.unwrap_or_default()
+			.into_iter()
+			.filter_map(|t| {
+				let id = t.id?;
+				let title = t.title.clone().unwrap_or_default();
+				let artist = db::resolved_artist_name(&t.album_artist, &t.artists).unwrap_or_default();
+				if title.is_empty() || artist.is_empty() {
+					return None;
+				}
+				let has_lyrics = db::lyrics_manager::get_lyrics(&conn, id)
+					.ok()
+					.flatten()
+					.is_some();
+				if has_lyrics {
+					return None;
+				}
+				let album = db::first_album_name(&t.albums);
+				let duration_secs = t.duration_ms.map(|ms| (ms / 1000) as u64);
+				Some((t.uid, title, artist, album, duration_secs))
+			})
+			.collect()
+	};
+
+	if candidates.is_empty() {
+		return;
+	}
+
+	let client = match crate::enrichment::make_client() {
+		Ok(c) => c,
+		Err(_) => return,
+	};
+
+	let mut touched: std::collections::HashSet<String> = std::collections::HashSet::new();
+	let mut since_refresh = 0usize;
+
+	for (uid, title, artist, album, duration_secs) in candidates {
+		let result = crate::enrichment::lyrics::fetch_lyrics(
+			&client,
+			&title,
+			&artist,
+			album.as_deref(),
+			duration_secs,
+		)
+		.await;
+
+		let Some(lyrics) = result else {
+			continue;
+		};
+
+		let Ok((source_conn, lib)) =
+			library_manager::open_source_conn_for_entity(&profile_uid, &uid, "tracks")
+		else {
+			continue;
+		};
+		let Some(track_id) = db::get_track_by_uid(&source_conn, &uid)
+			.ok()
+			.flatten()
+			.and_then(|t| t.id)
+		else {
+			continue;
+		};
+
+		let saved = db::lyrics_manager::upsert_lyrics(
+			&source_conn,
+			&Lyrics {
+				id: None,
+				track_uid: String::new(),
+				track_id,
+				source: lyrics.source,
+				plain: lyrics.plain,
+				synced: lyrics.synced,
+				instrumental: lyrics.instrumental,
+			},
+		)
+		.is_ok();
+
+		if saved {
+			touched.insert(lib.uid);
+			since_refresh += 1;
+		}
+
+		if since_refresh >= 50 {
+			for lib_uid in touched.drain() {
+				let _ = library_manager::incremental_update(&profile_uid, &[lib_uid]);
+			}
+			app.emit("library:updated", ()).ok();
+			since_refresh = 0;
+		}
+	}
+
+	for lib_uid in touched.drain() {
+		let _ = library_manager::incremental_update(&profile_uid, &[lib_uid]);
+	}
+	app.emit("library:updated", ()).ok();
+}
