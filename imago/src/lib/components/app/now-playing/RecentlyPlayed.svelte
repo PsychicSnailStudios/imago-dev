@@ -2,7 +2,7 @@
 
 	// COMPONENTS
 	import * as Tabs from "$shadcn/tabs/index.js";
-	import ScrollArea from "$shadcn/scroll-area/scroll-area.svelte";
+	import ScrollArea from "$lib/components/custom/ScrollView.svelte";
 
 	// CUSTOM COMPONENTS
 	import QueueTrackItem from "$lib/components/app/now-playing/QueueTrackItem.svelte";

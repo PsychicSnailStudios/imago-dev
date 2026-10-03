@@ -2,7 +2,7 @@
 	import { CirclePlus, Pencil, X } from "lucide-svelte";
 
 	import { Button } from "$shadcn/button/index.js";
-	import { ScrollArea } from "$shadcn/scroll-area/index.js";
+	import ScrollArea from "$lib/components/custom/ScrollView.svelte";
 
 	import TrackTableSettings from "$lib/components/custom/track-table/TrackTableSettings.svelte";
 	import ArtworkDisplay from "$lib/components/custom/ArtworkDisplay.svelte";

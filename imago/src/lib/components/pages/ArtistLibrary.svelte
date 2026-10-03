@@ -2,7 +2,7 @@
 	import { ArrowDownAZ, ArrowUpAZ, LayoutGrid, List } from "lucide-svelte";
 
 	import { Button } from "$shadcn/button/index.js";
-	import { ScrollArea } from "$shadcn/scroll-area/index.js";
+	import ScrollArea from "$lib/components/custom/ScrollView.svelte";
 
 	import ArtworkDisplay from "$lib/components/custom/ArtworkDisplay.svelte";
 	import SearchBar from "$lib/components/custom/search/SearchBar.svelte";

@@ -4,7 +4,7 @@
 
 	import { getTrackArrayFromUID } from "$ts/store/library.svelte";
 	import { explorePlaylists } from "$ts/config/explore.svelte";
-    import { ScrollArea } from "$shadcn/scroll-area";
+	import ScrollArea from "$lib/components/custom/ScrollView.svelte";
 </script>
 
 <div class="flex flex-col gap-3">

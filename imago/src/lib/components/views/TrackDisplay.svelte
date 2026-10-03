@@ -4,7 +4,7 @@
 	import { Pencil } from "lucide-svelte";
 
 	import * as Tabs from "$shadcn/tabs/index.js";
-	import ScrollArea from "$shadcn/scroll-area/scroll-area.svelte";
+	import ScrollArea from "$lib/components/custom/ScrollView.svelte";
 	import { Button } from "$shadcn/button/index.js";
 
 	import ArtworkDisplay from "$lib/components/custom/ArtworkDisplay.svelte";

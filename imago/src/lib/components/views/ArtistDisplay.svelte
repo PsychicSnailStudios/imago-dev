@@ -6,7 +6,7 @@
 
 	import * as Tabs from "$shadcn/tabs/index.js";
 	import { Button } from "$shadcn/button/index.js";
-	import ScrollArea from "$shadcn/scroll-area/scroll-area.svelte";
+	import ScrollArea from "$lib/components/custom/ScrollView.svelte";
 
 	import ArtworkDisplay from "$lib/components/custom/ArtworkDisplay.svelte";
 	import AudioCard from "$lib/components/custom/cards/AudioCard.svelte";

@@ -6,7 +6,7 @@
 	import * as Tabs from "$shadcn/tabs/index.js";
 	import * as DropdownMenu from "$shadcn/dropdown-menu/index.js";
 	import { Button } from "$shadcn/button/index.js";
-	import { ScrollArea } from "$shadcn/scroll-area/index.js";
+	import ScrollArea from "$lib/components/custom/ScrollView.svelte";
 
 	import SearchBar from "$lib/components/custom/search/SearchBar.svelte";
 	import SearchFilterPopover from "$lib/components/custom/search/SearchFilterPopover.svelte";

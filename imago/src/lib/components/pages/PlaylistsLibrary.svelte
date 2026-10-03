@@ -2,7 +2,7 @@
 	// COMPONENTS
 	import { FolderPlus, ListPlus, FileDown, LayoutGrid, List, ChevronRight, ChevronDown, Folder, FolderOpen, House } from "lucide-svelte";
 	import * as ContextMenu from "$shadcn/context-menu/index.js";
-	import { ScrollArea } from "$shadcn/scroll-area/index.js";
+	import ScrollArea from "$lib/components/custom/ScrollView.svelte";
 	import { Button } from "$shadcn/button/index.js";
 
 	// CUSTOM COMPONENTS

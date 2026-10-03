@@ -4,7 +4,7 @@
 	import * as Tabs from "$shadcn/tabs/index.js";
 	import * as Tooltip from "$shadcn/tooltip/index.js";
 	import { Checkbox } from "$shadcn/checkbox/index.js";
-	import { ScrollArea } from "$shadcn/scroll-area/index.js";
+	import ScrollArea from "$lib/components/custom/ScrollView.svelte";
 	import { Button, buttonVariants } from "$shadcn/button/index.js";
 
 	import SearchBar from "$lib/components/custom/search/SearchBar.svelte";

@@ -2,7 +2,7 @@
 	import { Pencil } from "lucide-svelte";
 	import { invoke } from "@tauri-apps/api/core";
 
-	import { ScrollArea } from "$shadcn/scroll-area/index.js";
+	import ScrollArea from "$lib/components/custom/ScrollView.svelte";
 	import Button from "$shadcn/button/button.svelte";
 
 	import TrackTableSettings from "$lib/components/custom/track-table/TrackTableSettings.svelte";

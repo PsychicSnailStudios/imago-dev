@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Button } from "$shadcn/button/index.js";
-	import { ScrollArea } from "$shadcn/scroll-area/index.js";
+	import ScrollArea from "$lib/components/custom/ScrollView.svelte";
 	import * as AlertDialog from "$shadcn/alert-dialog/index.js";
 	import {
 		spotifyIsConnected,
