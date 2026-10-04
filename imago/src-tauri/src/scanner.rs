@@ -252,6 +252,7 @@ struct FilenameMetadata {
     album: Option<String>,
     year: Option<String>,
     disc: Option<u32>,
+    track_number: Option<u32>,
 }
 
 fn parse_filename(path: &Path, custom_pattern: &str) -> FilenameMetadata {
@@ -265,12 +266,13 @@ fn parse_filename(path: &Path, custom_pattern: &str) -> FilenameMetadata {
         return parse_custom_pattern(&stem, custom_pattern);
     }
 
-    let patterns: &[&[&str]] = &[
-        &["{artist}", "{album}", "{year}", "{title}"],
-        &["{year}", "{artist}", "{album}", "{title}"],
-        &["{artist}", "{title}"],
-        &["{title}"],
-    ];
+	let patterns: &[&[&str]] = &[
+		&["{artist}", "{album}", "{year}", "{title}"],
+		&["{year}", "{artist}", "{album}", "{title}"],
+		&["{track}", "{title}"],
+		&["{artist}", "{title}"],
+		&["{title}"],
+	];
 
     for pattern in patterns {
         if let Some(meta) = try_parse_pattern(&stem, pattern) {
@@ -284,7 +286,12 @@ fn parse_filename(path: &Path, custom_pattern: &str) -> FilenameMetadata {
         album: None,
         year: None,
         disc: None,
+        track_number: None,
     }
+}
+
+fn is_track_number_like(s: &str) -> bool {
+	!s.is_empty() && s.len() <= 3 && s.chars().all(|c| c.is_ascii_digit())
 }
 
 fn try_parse_pattern(stem: &str, pattern: &[&str]) -> Option<FilenameMetadata> {
@@ -299,14 +306,32 @@ fn try_parse_pattern(stem: &str, pattern: &[&str]) -> Option<FilenameMetadata> {
         album: None,
         year: None,
         disc: None,
+        track_number: None,
     };
 
     for (i, &field) in pattern.iter().enumerate() {
         let value = parts[i].trim().to_string();
         match field {
             "{title}" => meta.title = Some(value),
-            "{artist}" => meta.artist = Some(value),
-            "{album}" => meta.album = Some(value),
+			"{artist}" => {
+				if is_track_number_like(&value) {
+					return None;
+				}
+				meta.artist = Some(value);
+			}
+			"{album}" => {
+				if is_track_number_like(&value) {
+					return None;
+				}
+				meta.album = Some(value);
+			}
+			"{track}" => {
+				if is_track_number_like(&value) {
+					meta.track_number = value.parse::<u32>().ok();
+				} else {
+					return None;
+				}
+			}
             "{year}" => {
                 if value.len() == 4 && value.parse::<u32>().is_ok() {
                     meta.year = Some(value);
@@ -354,6 +379,7 @@ fn parse_custom_pattern(stem: &str, pattern: &str) -> FilenameMetadata {
         album: None,
         year: None,
         disc: None,
+        track_number: None,
     };
     for (i, field) in fields.iter().enumerate() {
         if let Some(value) = values.get(i) {
@@ -522,6 +548,7 @@ fn parse_folder_path(path: &Path) -> FilenameMetadata {
             album: None,
             year: None,
             disc: None,
+            track_number: None,
         };
     }
 
@@ -540,6 +567,7 @@ fn parse_folder_path(path: &Path) -> FilenameMetadata {
             album: None,
             year: None,
             disc: None,
+            track_number: None,
         };
     }
 
@@ -554,6 +582,7 @@ fn parse_folder_path(path: &Path) -> FilenameMetadata {
                 album: Some(folder.to_string()),
                 year: Some(maybe_year.to_string()),
                 disc: None,
+                track_number: None,
             };
         }
     }
@@ -565,6 +594,7 @@ fn parse_folder_path(path: &Path) -> FilenameMetadata {
             album: Some(captures.0),
             year: Some(captures.1),
             disc: None,
+            track_number: None,
         };
     }
 
@@ -574,6 +604,7 @@ fn parse_folder_path(path: &Path) -> FilenameMetadata {
         album: Some(folder.to_string()),
         year: None,
         disc: None,
+        track_number: None,
     }
 }
 
@@ -848,6 +879,8 @@ pub fn read_track_with_settings(
             None, None, None, None, None, None, None, None, None, None, None, None, None,
         )
     };
+
+    let tag_track_number = tag_track_number.or(filename_meta.track_number);
 
     let tag_artist = tag_artist.filter(|s| !s.trim().is_empty());
     let tag_album = tag_album.filter(|s| !s.trim().is_empty());
@@ -1503,6 +1536,9 @@ fn find_or_create_artist(conn: &Connection, name: &str) -> Option<(i64, String)>
 pub fn process_track(conn: &Connection, track: &Track) {
     let mut album_cache: AlbumCache = build_album_cache(conn);
     let mut artist_cache: ArtistCache = build_artist_cache(conn);
+
+    let tag_conn_owned: Option<Connection> = default_library_conn_if_other(conn);
+    let tag_conn: &Connection = tag_conn_owned.as_ref().unwrap_or(conn);
     process_track_cached(conn, track, &mut album_cache, &mut artist_cache);
 }
 
@@ -1620,6 +1656,39 @@ pub fn process_track_cached(
             }
         }
     }
+}
+
+pub fn default_library_conn_if_other(conn: &Connection) -> Option<Connection> {
+	let default_path: String = conn
+		.query_row(
+			"SELECT file_path FROM settings.libraries WHERE is_default = 1 LIMIT 1",
+			[],
+			|row| row.get(0),
+		)
+		.ok()?;
+	let main_path: String = conn
+		.query_row(
+			"SELECT file FROM pragma_database_list WHERE name = 'main'",
+			[],
+			|row| row.get(0),
+		)
+		.ok()?;
+
+	let norm = |p: &str| -> String {
+		std::fs::canonicalize(p)
+			.map(|c| c.to_string_lossy().to_string())
+			.unwrap_or_else(|_| p.to_string())
+			.replace('\\', "/")
+			.to_lowercase()
+	};
+
+	if norm(&default_path) == norm(&main_path) {
+		return None;
+	}
+
+	let other = Connection::open(&default_path).ok()?;
+	let _ = crate::db::tag_manager::create_tag_tables(&other);
+	Some(other)
 }
 
 pub fn scan_directory_with_progress(conn: &Connection, dir: &str, app: &AppHandle) {
@@ -1791,7 +1860,7 @@ pub fn scan_directory_with_progress(conn: &Connection, dir: &str, app: &AppHandl
                 {
                     for name in &names {
                         crate::db::tag_manager::ensure_tag(
-                            conn,
+                            tag_conn,
                             name,
                             crate::db::tag_manager::TagKind::Tag,
                         );
@@ -1804,7 +1873,7 @@ pub fn scan_directory_with_progress(conn: &Connection, dir: &str, app: &AppHandl
                 {
                     for name in &names {
                         crate::db::tag_manager::ensure_tag(
-                            conn,
+                            tag_conn,
                             name,
                             crate::db::tag_manager::TagKind::Genre,
                         );

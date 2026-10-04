@@ -217,6 +217,9 @@ fn process_event(
                         Ok(_) => {
                             crate::scanner::process_track(&conn, &track);
 
+                            let tag_conn_owned = crate::scanner::default_library_conn_if_other(&conn);
+                            let tag_conn: &Connection = tag_conn_owned.as_ref().unwrap_or(&conn);
+
                             if let Some(names) = track
                                 .tags
                                 .as_deref()
@@ -224,7 +227,7 @@ fn process_event(
                             {
                                 for name in &names {
                                     crate::db::tag_manager::ensure_tag(
-                                        &conn,
+                                        tag_conn,
                                         name,
                                         crate::db::tag_manager::TagKind::Tag,
                                     );
@@ -237,7 +240,7 @@ fn process_event(
                             {
                                 for name in &names {
                                     crate::db::tag_manager::ensure_tag(
-                                        &conn,
+                                        tag_conn,
                                         name,
                                         crate::db::tag_manager::TagKind::Genre,
                                     );
