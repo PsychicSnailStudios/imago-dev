@@ -1536,9 +1536,6 @@ fn find_or_create_artist(conn: &Connection, name: &str) -> Option<(i64, String)>
 pub fn process_track(conn: &Connection, track: &Track) {
     let mut album_cache: AlbumCache = build_album_cache(conn);
     let mut artist_cache: ArtistCache = build_artist_cache(conn);
-
-    let tag_conn_owned: Option<Connection> = default_library_conn_if_other(conn);
-    let tag_conn: &Connection = tag_conn_owned.as_ref().unwrap_or(conn);
     process_track_cached(conn, track, &mut album_cache, &mut artist_cache);
 }
 
@@ -1798,6 +1795,9 @@ pub fn scan_directory_with_progress(conn: &Connection, dir: &str, app: &AppHandl
     let mut album_cache: AlbumCache = build_album_cache(conn);
 
     let mut artist_cache: ArtistCache = build_artist_cache(conn);
+
+    let tag_conn_owned: Option<Connection> = default_library_conn_if_other(conn);
+    let tag_conn: &Connection = tag_conn_owned.as_ref().unwrap_or(conn);
 
     conn.execute_batch("BEGIN DEFERRED").ok();
 
