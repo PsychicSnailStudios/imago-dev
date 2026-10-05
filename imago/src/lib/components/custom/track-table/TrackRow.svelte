@@ -195,7 +195,7 @@
 					</span>
 				</div>
 				<div class="min-w-0 flex items-center">
-					<span role="button" tabindex="0" onclick={goToAlbumArtist} onkeydown={(e) => { if (e.key === 'Enter') goToAlbumArtist(); }} class="text-xs text-muted-foreground truncate cursor-pointer hover:underline">
+					<span class="text-xs text-muted-foreground truncate">
 						<ArtistsList artists={track.artists} />
 					</span>
 				</div>
@@ -204,7 +204,7 @@
 	{/if}
 
 	{#if showArtist}
-		<span role="button" tabindex="0" onclick={goToAlbumArtist} onkeydown={(e) => { if (e.key === 'Enter') goToAlbumArtist(); }} class="text-sm truncate cursor-pointer hover:underline">
+		<span class="text-sm truncate">
 			<ArtistsList artists={track.artists} />
 		</span>
 	{/if}
