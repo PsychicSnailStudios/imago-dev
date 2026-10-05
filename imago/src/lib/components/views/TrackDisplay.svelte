@@ -13,7 +13,7 @@
 	import TrackRating from "$lib/components/custom/text-display/TrackRating.svelte";
 	import TagList from "$lib/components/custom/tags/TagList.svelte";
 	import ArtistsList from "$lib/components/custom/text-display/ArtistsList.svelte";
-	import LyricsViewer from "$lib/components/custom/LyricsViewer.svelte";
+	import LyricsViewer from "$lib/components/app/now-playing/LyricsViewer.svelte";
 	import DownloadButton from "$lib/components/custom/DownloadButton.svelte";
 
 	import { getTrack, getAlbum, onLibraryChange, onSingleChange } from "$ts/store/library.svelte";

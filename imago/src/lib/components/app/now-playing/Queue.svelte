@@ -148,30 +148,29 @@
 
 <svelte:window onkeydown={handleKeyDown} />
 
-<Tabs.Content value="queue" class="p-1 space-y-2">
-	<p class="text-sm text-foreground">Now Playing</p>
-	<div class="rounded-md border-2">
-		{#if player.track}
-			<QueueTrackItem track={player.track} isNowPlaying={true} allUpcomingUids={upcomingUids} />
-		{/if}
-	</div>
-
-	
-	{#if upcomingTracks.length > 0}
-	<p class="text-sm text-foreground">Next up:</p>
-		<div class="flex justify-between">
-			<p class="text-xs text-muted-foreground">{formatTotalRemainingTime()} Remaining</p>
-			<button class="text-xs text-muted-foreground cursor-pointer hover:underline" onclick={clearQueue}>Clear</button>
+<Tabs.Content value="queue">
+	<ScrollArea class="flex flex-col gap-2 p-1 min-h-0 min-w-0 h-[400px]">
+		<p class="text-sm text-foreground">Now Playing</p>
+		<div class="rounded-md border-2">
+			{#if player.track}
+				<QueueTrackItem track={player.track} isNowPlaying={true} allUpcomingUids={upcomingUids} />
+			{/if}
 		</div>
-	{/if}
 
-	<ScrollArea
-		class="min-h-0 min-w-0 rounded-md {upcomingTracks.length > 0 ? 'h-[254px]' : 'h-[120px]'} {upcomingTracks.length === 0 && dragState.active ? 'border-2 border-dashed' : ''}"
-		ondragover={handleScrollAreaDragOver}
-		ondragleave={handleScrollAreaDragLeave}
-		ondrop={handleScrollAreaDrop}
-	>
-		<div class="flex flex-col gap-0.5 pb-2">
+		{#if upcomingTracks.length > 0}
+			<p class="text-sm text-foreground">Next up:</p>
+			<div class="flex justify-between">
+				<p class="text-xs text-muted-foreground">{formatTotalRemainingTime()} Remaining</p>
+				<button class="text-xs text-muted-foreground cursor-pointer hover:underline" onclick={clearQueue}>Clear</button>
+			</div>
+		{/if}
+
+		<div
+			class="flex flex-col gap-0.5 pb-2 rounded-md {upcomingTracks.length === 0 && dragState.active ? 'border-2 border-dashed' : ''}"
+			ondragover={handleScrollAreaDragOver}
+			ondragleave={handleScrollAreaDragLeave}
+			ondrop={handleScrollAreaDrop}
+		>
 			{#each upcomingTracks as track, i (track.uid)}
 				<div
 					class="relative"

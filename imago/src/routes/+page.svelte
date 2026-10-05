@@ -7,7 +7,7 @@
 	import * as Resizable from "$shadcn/resizable/index.js";
 
 	import PlayControls from "$lib/components/app/PlayControls.svelte";
-	import NowPlaying from "$lib/components/app/now-playing/NowPlaying.svelte";
+	import NowPlaying from "$lib/components/app/NowPlaying.svelte";
 	import AppNavigation from "$lib/components/app/AppNavigation.svelte";
 
 	import HomeView from "$lib/components/pages/Home.svelte";

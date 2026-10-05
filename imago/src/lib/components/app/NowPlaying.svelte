@@ -6,7 +6,6 @@
 	import { Rows4, BadgePlus, Square } from "lucide-svelte";
 
 	import * as Tabs from "$shadcn/tabs/index.js";
-	import ScrollArea from "$shadcn/scroll-area/scroll-area.svelte";
 	import { Button } from "$shadcn/button";
 
 	// CUSTOM COMPONENTS
@@ -15,7 +14,7 @@
 	import ScrollingText from "$lib/components/custom/text-display/ScrollingText.svelte";
 	import Queue from "$lib/components/app/now-playing/Queue.svelte";
 	import RecentlyPlayed from "$lib/components/app/now-playing/RecentlyPlayed.svelte";
-	import LyricsViewer from "$lib/components/custom/LyricsViewer.svelte";
+	import LyricsViewer from "$lib/components/app/now-playing/LyricsViewer.svelte";
 
 	// SCRIPTS
 	import { setSelection } from "$ts/store/session.svelte";
@@ -57,11 +56,7 @@
 			</Tabs.List>
 			<Queue />
 			<RecentlyPlayed />
-			<Tabs.Content value="lyrics">
-				<ScrollArea class="min-h-0 min-w-0 h-[400px] pl-4 pr-2">
-					<LyricsViewer uid={currentlyPlaying.track!.uid} />
-				</ScrollArea>
-			</Tabs.Content>
+			<LyricsViewer uid={currentlyPlaying.track!.uid} />
 		</Tabs.Root>
 	</div>
 	{/if}

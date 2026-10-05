@@ -7,6 +7,7 @@
 	// SCRIPTS
 	import { dragState } from "$ts/store/drag.svelte";
 	import { activeView, setView } from "$ts/store/session.svelte";
+    import ScrollView from "../custom/ScrollView.svelte";
 
 
 	// VARIABLES
@@ -45,7 +46,7 @@
 	}
 </script>
 
-<div class="app-nav bg-muted flex flex-col p-2 gap-1 rounded-md">
+<ScrollView class="app-nav min-h-[120px] bg-muted flex flex-col p-2 gap-1 rounded-md">
 	{#each VIEW_TABS as tab}
 		<Button
 			variant="{activeView.id === tab.value ? 'default' : 'ghost'}"
@@ -58,4 +59,4 @@
 			<span>{tab.label}</span>
 		</Button>
 	{/each}
-</div>
+</ScrollView>
