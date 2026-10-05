@@ -46,7 +46,7 @@
 	}
 </script>
 
-<ScrollView class="app-nav min-h-[120px] bg-muted flex flex-col p-2 gap-1 rounded-md">
+<ScrollView class="app-nav flex-auto min-h-[120px] bg-muted flex flex-col p-2 gap-1 rounded-md">
 	{#each VIEW_TABS as tab}
 		<Button
 			variant="{activeView.id === tab.value ? 'default' : 'ghost'}"

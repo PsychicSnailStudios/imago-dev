@@ -45,11 +45,11 @@
 
 </script>
 
-<div class="app-now-playing-wrapper flex flex-col gap-1 bg-muted rounded-md">
+<div class="app-now-playing-wrapper flex flex-col gap-1 bg-muted rounded-md min-h-0">
 	{#if showQueue}
-	<div class="app-queue p-2 rounded-md h-[450px]">
-		<Tabs.Root value="queue">
-			<Tabs.List>
+	<div class="app-queue p-2 rounded-md flex flex-col flex-[0_1_450px] min-h-0">
+		<Tabs.Root value="queue" class="flex flex-col flex-1 min-h-0">
+			<Tabs.List class="self-start shrink-0">
 				<Tabs.Trigger value="queue">Queue</Tabs.Trigger>
 				<Tabs.Trigger value="recent">Recently Played</Tabs.Trigger>
 				<Tabs.Trigger value="lyrics">Lyrics</Tabs.Trigger>
@@ -99,5 +99,6 @@
 	grid-template-columns: auto 1fr auto;
 	max-height: 85px;
 	height: 85px;
+	flex-shrink: 0;
 }
 </style>

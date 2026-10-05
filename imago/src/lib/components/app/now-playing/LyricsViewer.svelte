@@ -36,8 +36,8 @@
 	}
 </script>
 
-<Tabs.Content value="lyrics">
-	<ScrollArea class="min-h-0 min-w-0 h-[400px] pl-4 pr-2">
+<Tabs.Content value="lyrics" class="relative flex-1 min-h-0">
+	<ScrollArea class="absolute inset-0 min-h-0 min-w-0 pl-4 pr-2">
 		{#if fetchingLyrics}
 			<div class="flex items-center gap-2 text-muted-foreground text-sm">
 				<Loader2 class="animate-spin size-4" />

@@ -15,8 +15,8 @@
 
 </script>
 
-<Tabs.Content value="recent">
-	<ScrollArea class="min-h-0 min-w-0 h-[400px]">
+<Tabs.Content value="recent" class="relative flex-1 min-h-0">
+	<ScrollArea class="absolute inset-0 min-h-0 min-w-0">
 		{#each recentTracks as track}
 			<QueueTrackItem track={track} />	
 		{/each}

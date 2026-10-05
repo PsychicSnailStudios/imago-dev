@@ -165,9 +165,9 @@
 <div bind:clientWidth={containerWidth} class="h-full w-full overflow-hidden">
 <Resizable.PaneGroup direction="horizontal" class="app-wrapper grid gap-0.5 pl-2 pr-2 pb-2 overflow-hidden">
 
-	<Resizable.Pane defaultSize={defaultSidebarWidth} minSize={minSidebarWidth} maxSize={maxSidebarWidth} class="app-sidebar grid gap-1">
-		<div class="app-sidebar grid gap-1 max-[{maxSidebarWidth}px]">
-			<div>
+	<Resizable.Pane defaultSize={defaultSidebarWidth} minSize={minSidebarWidth} maxSize={maxSidebarWidth} class="grid grid-rows-[minmax(0,1fr)] min-h-0">
+		<div class="app-sidebar gap-1 max-[{maxSidebarWidth}px]">
+			<div class="shrink-0">
 				{#if scanState.loading && scanState.total > 0}
 					<div class="space-y-1 px-2 py-1">
 						<div class="w-full bg-muted rounded-full h-2">
@@ -257,8 +257,9 @@
 	}
 
 	.app-sidebar {
-		grid-template-rows: auto 1fr auto;
+		display: flex;
 		flex-direction: column;
+		min-height: 0;
 		min-width: 10rem;
 		max-width: 30rem;
 	}
