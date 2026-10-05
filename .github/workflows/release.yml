@@ -26,7 +26,7 @@ jobs:
 
     defaults:
       run:
-        working-directory: sonodex
+        working-directory: imago
 
     steps:
       - uses: actions/checkout@v4
@@ -64,10 +64,10 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          projectPath: sonodex
+          projectPath: imago
           tauriScript: bunx tauri
           tagName: ${{ github.ref_name }}
-          releaseName: "Sonodex ${{ github.ref_name }}"
+          releaseName: "Imago ${{ github.ref_name }}"
           releaseBody: "See the release assets for downloads."
           releaseDraft: true
           prerelease: false
