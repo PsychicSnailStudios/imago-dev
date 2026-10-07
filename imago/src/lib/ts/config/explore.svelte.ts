@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { resolveResource } from "@tauri-apps/api/path";
 import { getTracks, getPlaylist, reloadLibrary } from "$ts/store/library.svelte";
 import { parseAlbumEntries } from "$ts/util/parsers";
+import { getScrobbles } from "$ts/audio/scrobbleCache";
 import type { Playlist, Track, TrackEntry } from "$ts/util/types";
 import {
 	playlistDefinitions,
@@ -387,11 +388,7 @@ async function setExplorePlaylists(): Promise<void> {
 		const now = nowSeconds();
 		const [allTracks, refreshTimes] = await Promise.all([getTracks(), loadRefreshTimes()]);
 
-		let scrobblePromise: Promise<ScrobbleRow[]> | null = null;
-		const loadScrobbles = () => {
-			scrobblePromise ??= invoke<ScrobbleRow[]>("get_scrobbles");
-			return scrobblePromise;
-		};
+		const loadScrobbles = (): Promise<ScrobbleRow[]> => getScrobbles();
 
 		const playlists: Playlist[] = [];
 		for (const def of playlistDefinitions) {

@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { resetScrobbleCache } from "$ts/audio/scrobbleCache";
 
 export async function listenbrainzIsConnected(): Promise<boolean> {
 	return invoke<boolean>("listenbrainz_connection_status");
@@ -17,5 +18,7 @@ export async function listenbrainzValidateToken(token: string): Promise<boolean>
 }
 
 export async function importSpotifyHistory(zipPath: string): Promise<{ imported: number; skipped: number }> {
-	return invoke<{ imported: number; skipped: number }>("import_spotify_history_cmd", { zipPath });
+	const result = await invoke<{ imported: number; skipped: number }>("import_spotify_history_cmd", { zipPath });
+	resetScrobbleCache();
+	return result;
 }

@@ -94,7 +94,7 @@
 			const allNewNames = [...artistArr, ...(albumArtist ? [albumArtist] : [])];
 
 			if (originalTitle && title && originalTitle.toLowerCase() !== title.toLowerCase()) {
-				await renameAlbumInTracks(originalTitle, title, albumArtist);
+				await renameAlbumInTracks(originalTitle, title, albumArtist, uid);
 			}
 
 			if (originalAlbumArtist && albumArtist && originalAlbumArtist.toLowerCase() !== albumArtist.toLowerCase()) {

@@ -181,24 +181,74 @@ pub struct ImportResult {
 }
 
 #[tauri::command]
-pub fn import_spotify_history_cmd(
-    state: State<AppState>,
+pub async fn import_spotify_history_cmd(
+    state: State<'_, AppState>,
     zip_path: String,
 ) -> Result<ImportResult, String> {
+    let uid = state.get_uid();
+    crate::library_manager::run_blocking(move || import_spotify_history_blocking(&uid, &zip_path))
+        .await
+}
+
+struct SpotifyTrackIndexEntry {
+    uid: String,
+    album_artist_lower: Option<String>,
+    artists_lower: Vec<String>,
+    first_album_uid: Option<String>,
+}
+
+fn import_spotify_history_blocking(uid: &str, zip_path: &str) -> Result<ImportResult, String> {
+    use std::collections::HashMap;
     use std::io::Read;
 
-    let uid = state.get_uid();
-    let file = std::fs::File::open(&zip_path).map_err(|e| format!("open zip: {}", e))?;
+    let file = std::fs::File::open(zip_path).map_err(|e| format!("open zip: {}", e))?;
     let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("read zip: {}", e))?;
 
-    let merged_conn = crate::open_merged_conn(&uid);
-    let analytics_conn = crate::open_analytics_conn(&uid).map_err(|e| e.to_string())?;
+    let merged_conn = crate::open_merged_conn(uid);
+    let analytics_conn = crate::open_analytics_conn(uid).map_err(|e| e.to_string())?;
 
     let all_tracks = crate::db::get_all_tracks(&merged_conn).unwrap_or_default();
     let all_artists = crate::db::get_all_artists(&merged_conn).unwrap_or_default();
 
+    let mut track_index: HashMap<String, Vec<SpotifyTrackIndexEntry>> = HashMap::new();
+    for t in &all_tracks {
+        let title = match t.title.as_deref() {
+            Some(s) => s.to_lowercase(),
+            None => continue,
+        };
+        let artists_lower: Vec<String> = t
+            .artists
+            .as_deref()
+            .and_then(|s| serde_json::from_str::<Vec<String>>(s).ok())
+            .map(|v| v.iter().map(|a| a.to_lowercase()).collect())
+            .unwrap_or_default();
+        track_index
+            .entry(title)
+            .or_default()
+            .push(SpotifyTrackIndexEntry {
+                uid: t.uid.clone(),
+                album_artist_lower: t.album_artist.as_ref().map(|s| s.to_lowercase()),
+                artists_lower,
+                first_album_uid: crate::db::first_album_uid(&t.albums),
+            });
+    }
+
+    let mut artist_index: HashMap<String, String> = HashMap::new();
+    for a in &all_artists {
+        artist_index
+            .entry(a.name.to_lowercase())
+            .or_insert_with(|| a.uid.clone());
+    }
+
+    let mut match_cache: HashMap<(String, String), Option<(String, Option<String>)>> =
+        HashMap::new();
+
     let mut imported = 0usize;
     let mut skipped = 0usize;
+
+    let tx = analytics_conn
+        .unchecked_transaction()
+        .map_err(|e| e.to_string())?;
 
     for i in 0..archive.len() {
         let mut entry = archive
@@ -245,49 +295,45 @@ pub fn import_spotify_history_cmd(
             let artist_name = item.master_metadata_album_artist_name.clone();
             let album_name = item.master_metadata_album_album_name.clone();
 
-            let track_uid = track_name
-                .as_deref()
-                .and_then(|tn| {
-                    let tn_lower = tn.to_lowercase();
-                    all_tracks
-                        .iter()
-                        .find(|t| {
-                            t.title.as_deref().map(|s| s.to_lowercase()) == Some(tn_lower.clone())
-                                && artist_name.as_deref().map_or(true, |an| {
-                                    let an_lower = an.to_lowercase();
-                                    t.album_artist.as_ref().map(|s| s.to_lowercase())
-                                        == Some(an_lower.clone())
-                                        || t.artists
-                                            .as_deref()
-                                            .and_then(|s| {
-                                                serde_json::from_str::<Vec<String>>(s).ok()
-                                            })
-                                            .map_or(false, |v| {
-                                                v.iter().any(|a| a.to_lowercase() == an_lower)
-                                            })
-                                })
-                        })
-                        .map(|t| t.uid.clone())
-                })
-                .unwrap_or_default();
+            let artist_lower = artist_name.as_deref().map(|s| s.to_lowercase());
 
-            let artist_uid = artist_name
-                .as_deref()
-                .and_then(|an| {
-                    let an_lower = an.to_lowercase();
-                    all_artists
-                        .iter()
-                        .find(|a| a.name.to_lowercase() == an_lower)
-                        .map(|a| a.uid.clone())
-                })
-                .unwrap_or_default();
+            let (track_uid, album_uid) = match track_name.as_deref() {
+                Some(tn) => {
+                    let key = (
+                        tn.to_lowercase(),
+                        artist_lower.clone().unwrap_or_default(),
+                    );
+                    let found = match match_cache.get(&key) {
+                        Some(cached) => cached.clone(),
+                        None => {
+                            let result = track_index.get(&key.0).and_then(|candidates| {
+                                candidates
+                                    .iter()
+                                    .find(|c| match artist_lower.as_deref() {
+                                        None => true,
+                                        Some(an) => {
+                                            c.album_artist_lower.as_deref() == Some(an)
+                                                || c.artists_lower.iter().any(|a| a == an)
+                                        }
+                                    })
+                                    .map(|c| (c.uid.clone(), c.first_album_uid.clone()))
+                            });
+                            match_cache.insert(key, result.clone());
+                            result
+                        }
+                    };
+                    match found {
+                        Some((tuid, auid)) => (tuid, auid),
+                        None => (String::new(), None),
+                    }
+                }
+                None => (String::new(), None),
+            };
 
-            let album_uid = track_uid.is_empty().then_some(None).unwrap_or_else(|| {
-                all_tracks
-                    .iter()
-                    .find(|t| t.uid == track_uid)
-                    .and_then(|t| crate::db::first_album_uid(&t.albums))
-            });
+            let artist_uid = artist_lower
+                .as_deref()
+                .and_then(|an| artist_index.get(an).cloned())
+                .unwrap_or_default();
 
             let scrobble_uid = crate::db::analytics_manager::new_scrobble_uid();
             let scrobble = crate::db::analytics_manager::Scrobble {
@@ -311,12 +357,14 @@ pub fn import_spotify_history_cmd(
                 track_album: album_name,
             };
 
-            match crate::db::analytics_manager::log_scrobble(&analytics_conn, &scrobble) {
+            match crate::db::analytics_manager::log_scrobble(&tx, &scrobble) {
                 Ok(_) => imported += 1,
                 Err(_) => skipped += 1,
             }
         }
     }
+
+    tx.commit().map_err(|e| e.to_string())?;
 
     Ok(ImportResult { imported, skipped })
 }

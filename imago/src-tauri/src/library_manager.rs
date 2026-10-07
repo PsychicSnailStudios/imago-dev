@@ -46,23 +46,61 @@ struct RemoteSidecar {
 
 // ─── Connection helpers ───────────────────────────────────────────────────────
 
+pub fn tune_conn(conn: &Connection) {
+	let _ = conn.execute_batch(
+		"PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 8000;",
+	);
+}
+
+pub fn open_tuned<P: AsRef<std::path::Path>>(path: P) -> Result<Connection, String> {
+	let conn = Connection::open(path.as_ref()).map_err(|e| e.to_string())?;
+	tune_conn(&conn);
+	Ok(conn)
+}
+
+pub fn remove_wal_files(db_path: &str) {
+	for ext in ["-wal", "-shm"] {
+		let p = format!("{}{}", db_path, ext);
+		if std::path::Path::new(&p).exists() {
+			let _ = std::fs::remove_file(&p);
+		}
+	}
+}
+
+pub fn checkpoint_db(db_path: &str) {
+	if let Ok(conn) = Connection::open(db_path) {
+		let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+	}
+}
+
+pub async fn run_blocking<T, F>(f: F) -> Result<T, String>
+where
+	F: FnOnce() -> Result<T, String> + Send + 'static,
+	T: Send + 'static,
+{
+	match tauri::async_runtime::spawn_blocking(f).await {
+		Ok(r) => r,
+		Err(e) => Err(e.to_string()),
+	}
+}
+
 pub fn open_library_conn(profile_uid: &str, lib_uid: &str) -> Result<Connection, String> {
     let path = get_library_db_path(profile_uid, lib_uid);
-    let conn = Connection::open(&path).map_err(|e| e.to_string())?;
+    let conn = open_tuned(&path).map_err(|e| e.to_string())?;
     init_library_db(&conn).map_err(|e| e.to_string())?;
     Ok(conn)
 }
 
 pub fn open_local_library_conn(profile_uid: &str) -> Result<Connection, String> {
     let path = get_local_library_db_path(profile_uid);
-    let conn = Connection::open(&path).map_err(|e| e.to_string())?;
+    let conn = open_tuned(&path).map_err(|e| e.to_string())?;
     init_library_db(&conn).map_err(|e| e.to_string())?;
     Ok(conn)
 }
 
 pub fn open_merged_conn(profile_uid: &str) -> Result<Connection, String> {
     let path = get_merged_db_path(profile_uid);
-    let conn = Connection::open(&path).map_err(|e| e.to_string())?;
+    let conn = open_tuned(&path).map_err(|e| e.to_string())?;
     Ok(conn)
 }
 
@@ -72,7 +110,7 @@ pub fn open_merged_conn(profile_uid: &str) -> Result<Connection, String> {
 // Creates the local.db file and registers it as the default library.
 pub fn ensure_default_library(profile_uid: &str) -> Result<String, String> {
     let settings_conn =
-        Connection::open(get_settings_db_path(profile_uid)).map_err(|e| e.to_string())?;
+        open_tuned(get_settings_db_path(profile_uid)).map_err(|e| e.to_string())?;
 
     if let Some(existing) = get_default_library(&settings_conn).map_err(|e| e.to_string())? {
         return Ok(existing.uid);
@@ -81,7 +119,7 @@ pub fn ensure_default_library(profile_uid: &str) -> Result<String, String> {
     let lib_uid = crate::db::generate_uid("lib");
     let file_path = get_local_library_db_path(profile_uid);
 
-    let lib_conn = Connection::open(&file_path).map_err(|e| e.to_string())?;
+    let lib_conn = open_tuned(&file_path).map_err(|e| e.to_string())?;
     init_library_db(&lib_conn).map_err(|e| e.to_string())?;
 
     let library = Library {
@@ -110,7 +148,7 @@ pub fn ensure_default_library(profile_uid: &str) -> Result<String, String> {
 // whether to skip, incrementally update, or fully rebuild merged.db.
 pub fn on_load_sync(profile_uid: &str) -> Result<MergeResult, String> {
     let settings_conn =
-        Connection::open(get_settings_db_path(profile_uid)).map_err(|e| e.to_string())?;
+        open_tuned(get_settings_db_path(profile_uid)).map_err(|e| e.to_string())?;
 
     let changed = detect_changed_libraries(&settings_conn).map_err(|e| e.to_string())?;
 
@@ -137,341 +175,450 @@ pub fn on_load_sync(profile_uid: &str) -> Result<MergeResult, String> {
 
 // ─── Full rebuild ─────────────────────────────────────────────────────────────
 
-// Deletes and recreates merged.db from all source libraries.
-// Always called after: import, remote pull replacing entire file, manual request.
-pub fn full_rebuild(profile_uid: &str) -> Result<MergeResult, String> {
-    let merged_path = get_merged_db_path(profile_uid);
-
-    // Delete existing merged.db
-    if merged_path.exists() {
-        std::fs::remove_file(&merged_path).map_err(|e| e.to_string())?;
-    }
-
-    let merged_conn = Connection::open(&merged_path).map_err(|e| e.to_string())?;
-    init_merged_db(&merged_conn).map_err(|e| e.to_string())?;
-
-    let settings_conn =
-        Connection::open(get_settings_db_path(profile_uid)).map_err(|e| e.to_string())?;
-
-    let blocklist = get_blocked_uid_set(&settings_conn).map_err(|e| e.to_string())?;
-    let libraries = get_all_libraries(&settings_conn).map_err(|e| e.to_string())?;
-    let default_lib_uid = get_default_library(&settings_conn)
-        .map_err(|e| e.to_string())?
-        .map(|l| l.uid)
-        .unwrap_or_default();
-
-    let count = libraries.len();
-
-    for lib in &libraries {
-        if !std::path::Path::new(&lib.file_path).exists() {
-            eprintln!(
-                "[library_manager] Skipping missing library file: {}",
-                lib.file_path
-            );
-            continue;
-        }
-
-        let source_conn = Connection::open(&lib.file_path).map_err(|e| e.to_string())?;
-        copy_library_into_merged(
-            &source_conn,
-            &merged_conn,
-            &lib.uid,
-            &default_lib_uid,
-            &blocklist,
-        )?;
-
-        let current_version = read_data_version(&lib.file_path);
-        store_data_version(&settings_conn, &lib.uid, current_version).map_err(|e| e.to_string())?;
-    }
-
-    Ok(MergeResult {
-        rebuilt: true,
-        libraries_processed: count,
-    })
+fn reset_merged_file(merged_path: &std::path::Path) -> Result<(), String> {
+	let base = merged_path.to_string_lossy().to_string();
+	let mut main_removed = true;
+	if merged_path.exists() {
+		main_removed = std::fs::remove_file(merged_path).is_ok();
+	}
+	if main_removed {
+		remove_wal_files(&base);
+	}
+	Ok(())
 }
 
-// ─── Incremental update ───────────────────────────────────────────────────────
+fn clear_merged_tables(merged: &Connection) -> Result<(), String> {
+	for table in ["lyrics", "tracks", "albums", "artists"] {
+		merged
+			.execute(&format!("DELETE FROM {}", table), [])
+			.map_err(|e| e.to_string())?;
+	}
+	Ok(())
+}
 
-// Reprocesses only the libraries whose data_version has changed.
-// For each changed library: upsert all its records into merged.db,
-// then remove any merged records that no longer exist in any source.
+pub fn full_rebuild(profile_uid: &str) -> Result<MergeResult, String> {
+	let merged_path = get_merged_db_path(profile_uid);
+
+	reset_merged_file(&merged_path)?;
+
+	let merged_conn = open_tuned(&merged_path)?;
+	init_merged_db(&merged_conn).map_err(|e| e.to_string())?;
+	clear_merged_tables(&merged_conn)?;
+
+	let settings_conn = open_tuned(get_settings_db_path(profile_uid))?;
+
+	let blocklist = get_blocked_uid_set(&settings_conn).map_err(|e| e.to_string())?;
+	let libraries = get_all_libraries(&settings_conn).map_err(|e| e.to_string())?;
+	let default_lib_uid = get_default_library(&settings_conn)
+		.map_err(|e| e.to_string())?
+		.map(|l| l.uid)
+		.unwrap_or_default();
+
+	let count = libraries.len();
+
+	for lib in &libraries {
+		if !std::path::Path::new(&lib.file_path).exists() {
+			eprintln!(
+				"[library_manager] Skipping missing library file: {}",
+				lib.file_path
+			);
+			continue;
+		}
+
+		let source_conn = open_tuned(&lib.file_path)?;
+		{
+			let tx = merged_conn.unchecked_transaction().map_err(|e| e.to_string())?;
+			copy_library_into_merged(&source_conn, &merged_conn, &lib.uid, &blocklist)?;
+			tx.commit().map_err(|e| e.to_string())?;
+		}
+
+		let current_version = read_data_version(&lib.file_path);
+		store_data_version(&settings_conn, &lib.uid, current_version).map_err(|e| e.to_string())?;
+	}
+
+	refresh_local_override_flags(&merged_conn, &default_lib_uid)?;
+
+	Ok(MergeResult {
+		rebuilt: true,
+		libraries_processed: count,
+	})
+}
+
+// ─── Incremental update (whole library) ───────────────────────────────────────
+
 pub fn incremental_update(profile_uid: &str, changed_lib_uids: &[String]) -> Result<(), String> {
-    let merged_path = get_merged_db_path(profile_uid);
-    if !merged_path.exists() {
-        full_rebuild(profile_uid)?;
-        return Ok(());
-    }
+	let merged_path = get_merged_db_path(profile_uid);
+	if !merged_path.exists() {
+		full_rebuild(profile_uid)?;
+		return Ok(());
+	}
 
-    let merged_conn = Connection::open(&merged_path).map_err(|e| e.to_string())?;
-    let settings_conn =
-        Connection::open(get_settings_db_path(profile_uid)).map_err(|e| e.to_string())?;
+	let merged_conn = open_tuned(&merged_path)?;
+	let settings_conn = open_tuned(get_settings_db_path(profile_uid))?;
 
-    let blocklist = get_blocked_uid_set(&settings_conn).map_err(|e| e.to_string())?;
-    let all_libraries = get_all_libraries(&settings_conn).map_err(|e| e.to_string())?;
-    let default_lib_uid = get_default_library(&settings_conn)
-        .map_err(|e| e.to_string())?
-        .map(|l| l.uid)
-        .unwrap_or_default();
+	let blocklist = get_blocked_uid_set(&settings_conn).map_err(|e| e.to_string())?;
+	let all_libraries = get_all_libraries(&settings_conn).map_err(|e| e.to_string())?;
+	let default_lib_uid = get_default_library(&settings_conn)
+		.map_err(|e| e.to_string())?
+		.map(|l| l.uid)
+		.unwrap_or_default();
 
-    for lib_uid in changed_lib_uids {
-        let lib = match all_libraries.iter().find(|l| &l.uid == lib_uid) {
-            Some(l) => l,
-            None => continue,
-        };
+	for lib_uid in changed_lib_uids {
+		let lib = match all_libraries.iter().find(|l| &l.uid == lib_uid) {
+			Some(l) => l,
+			None => continue,
+		};
 
-        if !std::path::Path::new(&lib.file_path).exists() {
-            // Library file gone — remove all its records from merged
-            remove_library_from_merged(&merged_conn, lib_uid)?;
-            continue;
-        }
+		if !std::path::Path::new(&lib.file_path).exists() {
+			remove_library_from_merged(&merged_conn, lib_uid)?;
+			continue;
+		}
 
-        let source_conn = Connection::open(&lib.file_path).map_err(|e| e.to_string())?;
-        copy_library_into_merged(
-            &source_conn,
-            &merged_conn,
-            lib_uid,
-            &default_lib_uid,
-            &blocklist,
-        )?;
+		let source_conn = open_tuned(&lib.file_path)?;
+		{
+			let tx = merged_conn.unchecked_transaction().map_err(|e| e.to_string())?;
+			copy_library_into_merged(&source_conn, &merged_conn, lib_uid, &blocklist)?;
+			cleanup_deleted_records(&source_conn, &merged_conn, lib_uid)?;
+			tx.commit().map_err(|e| e.to_string())?;
+		}
 
-        // Remove merged records from this library that no longer exist in the source
-        cleanup_deleted_records(&source_conn, &merged_conn, lib_uid)?;
+		let current_version = read_data_version(&lib.file_path);
+		store_data_version(&settings_conn, lib_uid, current_version).map_err(|e| e.to_string())?;
+	}
 
-        let current_version = read_data_version(&lib.file_path);
-        store_data_version(&settings_conn, lib_uid, current_version).map_err(|e| e.to_string())?;
-    }
+	refresh_local_override_flags(&merged_conn, &default_lib_uid)?;
 
-    // Recompute is_local_override across the full merged set
-    refresh_local_override_flags(&merged_conn, &default_lib_uid)?;
+	Ok(())
+}
 
-    Ok(())
+// ─── Targeted sync (specific records only) ────────────────────────────────────
+
+pub fn sync_entities(
+	profile_uid: &str,
+	lib_uid: &str,
+	track_uids: &[String],
+	album_uids: &[String],
+	artist_uids: &[String],
+) -> Result<(), String> {
+	if track_uids.is_empty() && album_uids.is_empty() && artist_uids.is_empty() {
+		return Ok(());
+	}
+
+	let merged_path = get_merged_db_path(profile_uid);
+	if !merged_path.exists() {
+		full_rebuild(profile_uid)?;
+		return Ok(());
+	}
+
+	let merged_conn = open_tuned(&merged_path)?;
+	let settings_conn = open_tuned(get_settings_db_path(profile_uid))?;
+
+	let blocklist = get_blocked_uid_set(&settings_conn).map_err(|e| e.to_string())?;
+	let lib = get_library_by_uid(&settings_conn, lib_uid)
+		.map_err(|e| e.to_string())?
+		.ok_or_else(|| format!("Library not found: {}", lib_uid))?;
+	let default_lib_uid = get_default_library(&settings_conn)
+		.map_err(|e| e.to_string())?
+		.map(|l| l.uid)
+		.unwrap_or_default();
+
+	if !std::path::Path::new(&lib.file_path).exists() {
+		remove_library_from_merged(&merged_conn, lib_uid)?;
+		return Ok(());
+	}
+
+	let source_conn = open_tuned(&lib.file_path)?;
+
+	{
+		let tx = merged_conn.unchecked_transaction().map_err(|e| e.to_string())?;
+
+		if !track_uids.is_empty() {
+			delete_merged_lyrics_for(&merged_conn, track_uids)?;
+			copy_tracks(&source_conn, &merged_conn, lib_uid, &blocklist, Some(track_uids))
+				.map_err(|e| e.to_string())?;
+			copy_lyrics(&source_conn, &merged_conn, lib_uid, Some(track_uids))
+				.map_err(|e| e.to_string())?;
+			remove_missing_records(&source_conn, &merged_conn, lib_uid, "tracks", track_uids)?;
+			refresh_flags_for(&merged_conn, &default_lib_uid, "tracks", track_uids)?;
+		}
+		if !album_uids.is_empty() {
+			copy_albums(&source_conn, &merged_conn, lib_uid, &blocklist, Some(album_uids))
+				.map_err(|e| e.to_string())?;
+			remove_missing_records(&source_conn, &merged_conn, lib_uid, "albums", album_uids)?;
+			refresh_flags_for(&merged_conn, &default_lib_uid, "albums", album_uids)?;
+		}
+		if !artist_uids.is_empty() {
+			copy_artists(&source_conn, &merged_conn, lib_uid, &blocklist, Some(artist_uids))
+				.map_err(|e| e.to_string())?;
+			remove_missing_records(&source_conn, &merged_conn, lib_uid, "artists", artist_uids)?;
+			refresh_flags_for(&merged_conn, &default_lib_uid, "artists", artist_uids)?;
+		}
+
+		tx.commit().map_err(|e| e.to_string())?;
+	}
+
+	let current_version = read_data_version(&lib.file_path);
+	store_data_version(&settings_conn, lib_uid, current_version).map_err(|e| e.to_string())?;
+
+	Ok(())
+}
+
+pub fn sync_track(profile_uid: &str, lib_uid: &str, uid: &str) -> Result<(), String> {
+	sync_entities(profile_uid, lib_uid, &[uid.to_string()], &[], &[])
+}
+
+pub fn sync_album(profile_uid: &str, lib_uid: &str, uid: &str) -> Result<(), String> {
+	sync_entities(profile_uid, lib_uid, &[], &[uid.to_string()], &[])
+}
+
+pub fn sync_artist(profile_uid: &str, lib_uid: &str, uid: &str) -> Result<(), String> {
+	sync_entities(profile_uid, lib_uid, &[], &[], &[uid.to_string()])
+}
+
+fn delete_merged_lyrics_for(merged: &Connection, track_uids: &[String]) -> Result<(), String> {
+	let mut stmt = merged
+		.prepare_cached("DELETE FROM lyrics WHERE track_id IN (SELECT id FROM tracks WHERE uid = ?1)")
+		.map_err(|e| e.to_string())?;
+	for uid in track_uids {
+		stmt.execute(params![uid]).map_err(|e| e.to_string())?;
+	}
+	Ok(())
+}
+
+fn remove_missing_records(
+	source: &Connection,
+	merged: &Connection,
+	lib_uid: &str,
+	table: &str,
+	uids: &[String],
+) -> Result<(), String> {
+	let mut exists = source
+		.prepare_cached(&format!("SELECT 1 FROM {} WHERE uid = ?1", table))
+		.map_err(|e| e.to_string())?;
+	let mut remove = merged
+		.prepare_cached(&format!(
+			"DELETE FROM {} WHERE uid = ?1 AND source_lib_uid = ?2",
+			table
+		))
+		.map_err(|e| e.to_string())?;
+	for uid in uids {
+		let present = exists
+			.exists(params![uid])
+			.map_err(|e| e.to_string())?;
+		if !present {
+			if table == "tracks" {
+				delete_merged_lyrics_for(merged, std::slice::from_ref(uid))?;
+			}
+			remove
+				.execute(params![uid, lib_uid])
+				.map_err(|e| e.to_string())?;
+		}
+	}
+	Ok(())
+}
+
+fn refresh_flags_for(
+	merged: &Connection,
+	default_lib_uid: &str,
+	table: &str,
+	uids: &[String],
+) -> Result<(), String> {
+	let mut stmt = merged
+		.prepare_cached(&format!(
+			"UPDATE {} SET is_local_override = CASE WHEN source_lib_uid = ?1 THEN 1 ELSE 0 END WHERE uid = ?2",
+			table
+		))
+		.map_err(|e| e.to_string())?;
+	for uid in uids {
+		stmt.execute(params![default_lib_uid, uid])
+			.map_err(|e| e.to_string())?;
+	}
+	Ok(())
 }
 
 // ─── Copy one library into merged ─────────────────────────────────────────────
 
 fn copy_library_into_merged(
-    source: &Connection,
-    merged: &Connection,
-    lib_uid: &str,
-    default_lib_uid: &str,
-    blocklist: &HashSet<String>,
+	source: &Connection,
+	merged: &Connection,
+	lib_uid: &str,
+	blocklist: &HashSet<String>,
 ) -> Result<(), String> {
-    copy_tracks(source, merged, lib_uid, blocklist).map_err(|e| e.to_string())?;
-    copy_albums(source, merged, lib_uid, blocklist).map_err(|e| e.to_string())?;
-    copy_artists(source, merged, lib_uid, blocklist).map_err(|e| e.to_string())?;
-    copy_lyrics(source, merged, lib_uid).map_err(|e| e.to_string())?;
-    refresh_local_override_flags(merged, default_lib_uid)?;
-    Ok(())
+	copy_tracks(source, merged, lib_uid, blocklist, None).map_err(|e| e.to_string())?;
+	copy_albums(source, merged, lib_uid, blocklist, None).map_err(|e| e.to_string())?;
+	copy_artists(source, merged, lib_uid, blocklist, None).map_err(|e| e.to_string())?;
+	copy_lyrics(source, merged, lib_uid, None).map_err(|e| e.to_string())?;
+	Ok(())
+}
+
+fn for_each_chunk<F>(filter: Option<&[String]>, column: &str, mut f: F) -> rusqlite::Result<()>
+where
+	F: FnMut(&str, &[String]) -> rusqlite::Result<()>,
+{
+	match filter {
+		None => f("", &[]),
+		Some(uids) => {
+			for chunk in uids.chunks(400) {
+				let placeholders = vec!["?"; chunk.len()].join(",");
+				let clause = format!(" WHERE {} IN ({})", column, placeholders);
+				f(&clause, chunk)?;
+			}
+			Ok(())
+		}
+	}
+}
+
+fn read_row_values(
+	row: &rusqlite::Row,
+	count: usize,
+) -> rusqlite::Result<Vec<rusqlite::types::Value>> {
+	let mut vals = Vec::with_capacity(count + 1);
+	for i in 0..count {
+		vals.push(row.get::<_, rusqlite::types::Value>(i)?);
+	}
+	Ok(vals)
 }
 
 fn copy_tracks(
-    source: &Connection,
-    merged: &Connection,
-    lib_uid: &str,
-    blocklist: &HashSet<String>,
+	source: &Connection,
+	merged: &Connection,
+	lib_uid: &str,
+	blocklist: &HashSet<String>,
+	filter: Option<&[String]>,
 ) -> rusqlite::Result<()> {
-    let mut stmt = source.prepare(
-        "SELECT uid, path, last_modified, title, artists, album_artist, albums, genres, year,
-		rating, tags, duration_ms, bpm, key, credits, label, artwork_blob, artwork_path,
-		artwork_thumb, user_options, format, bitrate, remote_path, remote_data, track_data, date_added
-		FROM tracks",
-    )?;
-
-    let rows: Vec<_> = stmt
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, i64>(2)?,
-                row.get::<_, Option<String>>(3)?,
-                row.get::<_, Option<String>>(4)?,
-                row.get::<_, Option<String>>(5)?,
-                row.get::<_, Option<String>>(6)?,
-                row.get::<_, Option<String>>(7)?,
-                row.get::<_, Option<String>>(8)?,
-                row.get::<_, Option<f32>>(9)?,
-                row.get::<_, Option<String>>(10)?,
-                row.get::<_, Option<i64>>(11)?,
-                row.get::<_, Option<f32>>(12)?,
-                row.get::<_, Option<String>>(13)?,
-                row.get::<_, Option<String>>(14)?,
-                row.get::<_, Option<String>>(15)?,
-                row.get::<_, Option<Vec<u8>>>(16)?,
-                row.get::<_, Option<String>>(17)?,
-                row.get::<_, Option<String>>(18)?,
-                row.get::<_, Option<String>>(19)?,
-                row.get::<_, Option<String>>(20)?,
-                row.get::<_, Option<i64>>(21)?,
-                row.get::<_, Option<String>>(22)?,
-                row.get::<_, Option<String>>(23)?,
-                row.get::<_, Option<String>>(24)?,
-                row.get::<_, Option<i64>>(25)?,
-            ))
-        })?
-        .filter_map(|r| r.ok())
-        .collect();
-
-    for row in rows {
-        if blocklist.contains(&row.0) {
-            continue;
-        }
-        merged.execute(
+	for_each_chunk(filter, "uid", |clause, args| {
+		let sql = format!(
+			"SELECT uid, path, last_modified, title, artists, album_artist, albums, genres, year,
+			rating, tags, duration_ms, bpm, key, credits, label, artwork_blob, artwork_path,
+			artwork_thumb, user_options, format, bitrate, remote_path, remote_data, track_data, date_added
+			FROM tracks{}",
+			clause
+		);
+		let mut stmt = source.prepare(&sql)?;
+		let mut rows = stmt.query(rusqlite::params_from_iter(args.iter()))?;
+		let mut insert = merged.prepare_cached(
 			"INSERT INTO tracks (
 				uid, path, last_modified, title, artists, album_artist, albums, genres, year,
 				rating, tags, duration_ms, bpm, key, credits, label, artwork_blob, artwork_path,
 				artwork_thumb, user_options, format, bitrate, remote_path, remote_data, track_data,
-				source_lib_uid, date_added
+				date_added, source_lib_uid
 			) VALUES (
-				?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,COALESCE(?27, 0)
+				?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,COALESCE(?26, 0),?27
 			)
 			ON CONFLICT(uid) DO UPDATE SET
-				path          = excluded.path,
-				last_modified = excluded.last_modified,
-				title         = excluded.title,
-				artists       = excluded.artists,
-				album_artist  = excluded.album_artist,
-				albums        = excluded.albums,
-				genres        = excluded.genres,
-				year          = excluded.year,
-				rating        = excluded.rating,
-				tags          = excluded.tags,
-				duration_ms   = excluded.duration_ms,
-				bpm           = excluded.bpm,
-				key           = excluded.key,
-				credits       = excluded.credits,
-				label         = excluded.label,
-				artwork_blob  = excluded.artwork_blob,
-				artwork_path  = excluded.artwork_path,
-				artwork_thumb = excluded.artwork_thumb,
-				user_options  = excluded.user_options,
-				format        = excluded.format,
-				bitrate       = excluded.bitrate,
-				remote_path   = excluded.remote_path,
-				remote_data   = excluded.remote_data,
-				track_data    = excluded.track_data,
-				source_lib_uid = excluded.source_lib_uid,
-				date_added    = excluded.date_added",
-			params![
-				row.0, row.1, row.2, row.3, row.4, row.5, row.6, row.7, row.8,
-				row.9, row.10, row.11, row.12, row.13, row.14, row.15, row.16, row.17,
-				row.18, row.19, row.20, row.21, row.22, row.23, row.24, lib_uid, row.25,
-			],
+				path           = excluded.path,
+				last_modified  = excluded.last_modified,
+				title          = excluded.title,
+				artists        = excluded.artists,
+				album_artist   = excluded.album_artist,
+				albums         = excluded.albums,
+				genres         = excluded.genres,
+				year           = excluded.year,
+				rating         = excluded.rating,
+				tags           = excluded.tags,
+				duration_ms    = excluded.duration_ms,
+				bpm            = excluded.bpm,
+				key            = excluded.key,
+				credits        = excluded.credits,
+				label          = excluded.label,
+				artwork_blob   = excluded.artwork_blob,
+				artwork_path   = excluded.artwork_path,
+				artwork_thumb  = excluded.artwork_thumb,
+				user_options   = excluded.user_options,
+				format         = excluded.format,
+				bitrate        = excluded.bitrate,
+				remote_path    = excluded.remote_path,
+				remote_data    = excluded.remote_data,
+				track_data     = excluded.track_data,
+				date_added     = excluded.date_added,
+				source_lib_uid = excluded.source_lib_uid",
 		)?;
-    }
-    Ok(())
+		while let Some(row) = rows.next()? {
+			let mut vals = read_row_values(row, 26)?;
+			if let rusqlite::types::Value::Text(ref uid) = vals[0] {
+				if blocklist.contains(uid) {
+					continue;
+				}
+			}
+			vals.push(rusqlite::types::Value::Text(lib_uid.to_string()));
+			insert.execute(rusqlite::params_from_iter(vals.iter()))?;
+		}
+		Ok(())
+	})
 }
 
 fn copy_albums(
-    source: &Connection,
-    merged: &Connection,
-    lib_uid: &str,
-    blocklist: &HashSet<String>,
+	source: &Connection,
+	merged: &Connection,
+	lib_uid: &str,
+	blocklist: &HashSet<String>,
+	filter: Option<&[String]>,
 ) -> rusqlite::Result<()> {
-    let mut stmt = source.prepare(
-        "SELECT uid, format, title, rating, artists, album_artist, release_date,
-		tags, genres, tracks, credits, label, artwork_blob, artwork_path, artwork_thumb, emulate_type
-		FROM albums",
-    )?;
-
-    let rows: Vec<_> = stmt
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, Option<String>>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, Option<f32>>(3)?,
-                row.get::<_, Option<String>>(4)?,
-                row.get::<_, Option<String>>(5)?,
-                row.get::<_, Option<String>>(6)?,
-                row.get::<_, Option<String>>(7)?,
-                row.get::<_, Option<String>>(8)?,
-                row.get::<_, Option<String>>(9)?,
-                row.get::<_, Option<String>>(10)?,
-                row.get::<_, Option<String>>(11)?,
-                row.get::<_, Option<Vec<u8>>>(12)?,
-                row.get::<_, Option<String>>(13)?,
-                row.get::<_, Option<String>>(14)?,
-                row.get::<_, Option<String>>(15)?,
-            ))
-        })?
-        .filter_map(|r| r.ok())
-        .collect();
-
-    for row in rows {
-        if blocklist.contains(&row.0) {
-            continue;
-        }
-        merged.execute(
-            "INSERT INTO albums (
+	for_each_chunk(filter, "uid", |clause, args| {
+		let sql = format!(
+			"SELECT uid, format, title, rating, artists, album_artist, release_date,
+			tags, genres, tracks, credits, label, artwork_blob, artwork_path, artwork_thumb, emulate_type
+			FROM albums{}",
+			clause
+		);
+		let mut stmt = source.prepare(&sql)?;
+		let mut rows = stmt.query(rusqlite::params_from_iter(args.iter()))?;
+		let mut insert = merged.prepare_cached(
+			"INSERT INTO albums (
 				uid, format, title, rating, artists, album_artist, release_date,
 				tags, genres, tracks, credits, label, artwork_blob, artwork_path,
 				artwork_thumb, emulate_type, source_lib_uid
 			) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)
 			ON CONFLICT(uid) DO UPDATE SET
-				format       = excluded.format,
-				title        = excluded.title,
-				rating       = excluded.rating,
-				artists      = excluded.artists,
-				album_artist = excluded.album_artist,
-				release_date = excluded.release_date,
-				tags         = excluded.tags,
-				genres       = excluded.genres,
-				tracks       = excluded.tracks,
-				credits      = excluded.credits,
-				label        = excluded.label,
-				artwork_blob = excluded.artwork_blob,
-				artwork_path = excluded.artwork_path,
-				artwork_thumb = excluded.artwork_thumb,
-				emulate_type = excluded.emulate_type,
+				format         = excluded.format,
+				title          = excluded.title,
+				rating         = excluded.rating,
+				artists        = excluded.artists,
+				album_artist   = excluded.album_artist,
+				release_date   = excluded.release_date,
+				tags           = excluded.tags,
+				genres         = excluded.genres,
+				tracks         = excluded.tracks,
+				credits        = excluded.credits,
+				label          = excluded.label,
+				artwork_blob   = excluded.artwork_blob,
+				artwork_path   = excluded.artwork_path,
+				artwork_thumb  = excluded.artwork_thumb,
+				emulate_type   = excluded.emulate_type,
 				source_lib_uid = excluded.source_lib_uid",
-            params![
-                row.0, row.1, row.2, row.3, row.4, row.5, row.6, row.7, row.8, row.9, row.10,
-                row.11, row.12, row.13, row.14, row.15, lib_uid,
-            ],
-        )?;
-    }
-    Ok(())
+		)?;
+		while let Some(row) = rows.next()? {
+			let mut vals = read_row_values(row, 16)?;
+			if let rusqlite::types::Value::Text(ref uid) = vals[0] {
+				if blocklist.contains(uid) {
+					continue;
+				}
+			}
+			vals.push(rusqlite::types::Value::Text(lib_uid.to_string()));
+			insert.execute(rusqlite::params_from_iter(vals.iter()))?;
+		}
+		Ok(())
+	})
 }
 
 fn copy_artists(
-    source: &Connection,
-    merged: &Connection,
-    lib_uid: &str,
-    blocklist: &HashSet<String>,
+	source: &Connection,
+	merged: &Connection,
+	lib_uid: &str,
+	blocklist: &HashSet<String>,
+	filter: Option<&[String]>,
 ) -> rusqlite::Result<()> {
-    let mut stmt = source.prepare(
-        "SELECT uid, name, aka, about, tags, genres, websites, members,
-		profile_art_blob, profile_art_path, profile_art_thumb, banner_art_blob, banner_art_path
-		FROM artists",
-    )?;
-
-    let rows: Vec<_> = stmt
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, Option<String>>(2)?,
-                row.get::<_, Option<String>>(3)?,
-                row.get::<_, Option<String>>(4)?,
-                row.get::<_, Option<String>>(5)?,
-                row.get::<_, Option<String>>(6)?,
-                row.get::<_, Option<String>>(7)?,
-                row.get::<_, Option<Vec<u8>>>(8)?,
-                row.get::<_, Option<String>>(9)?,
-                row.get::<_, Option<String>>(10)?,
-                row.get::<_, Option<Vec<u8>>>(11)?,
-                row.get::<_, Option<String>>(12)?,
-            ))
-        })?
-        .filter_map(|r| r.ok())
-        .collect();
-
-    for row in rows {
-        if blocklist.contains(&row.0) {
-            continue;
-        }
-        merged.execute(
-            "INSERT INTO artists (
+	for_each_chunk(filter, "uid", |clause, args| {
+		let sql = format!(
+			"SELECT uid, name, aka, about, tags, genres, websites, members,
+			profile_art_blob, profile_art_path, profile_art_thumb, banner_art_blob, banner_art_path
+			FROM artists{}",
+			clause
+		);
+		let mut stmt = source.prepare(&sql)?;
+		let mut rows = stmt.query(rusqlite::params_from_iter(args.iter()))?;
+		let mut insert = merged.prepare_cached(
+			"INSERT INTO artists (
 				uid, name, aka, about, tags, genres, websites, members,
 				profile_art_blob, profile_art_path, profile_art_thumb,
 				banner_art_blob, banner_art_path, source_lib_uid
@@ -490,151 +637,382 @@ fn copy_artists(
 				banner_art_blob   = excluded.banner_art_blob,
 				banner_art_path   = excluded.banner_art_path,
 				source_lib_uid    = excluded.source_lib_uid",
-            params![
-                row.0, row.1, row.2, row.3, row.4, row.5, row.6, row.7, row.8, row.9, row.10,
-                row.11, row.12, lib_uid,
-            ],
-        )?;
-    }
-    Ok(())
+		)?;
+		while let Some(row) = rows.next()? {
+			let mut vals = read_row_values(row, 13)?;
+			if let rusqlite::types::Value::Text(ref uid) = vals[0] {
+				if blocklist.contains(uid) {
+					continue;
+				}
+			}
+			vals.push(rusqlite::types::Value::Text(lib_uid.to_string()));
+			insert.execute(rusqlite::params_from_iter(vals.iter()))?;
+		}
+		Ok(())
+	})
 }
 
-fn copy_lyrics(source: &Connection, merged: &Connection, lib_uid: &str) -> rusqlite::Result<()> {
-    // Lyrics are joined to tracks via track_id (numeric). In merged.db the track_id
-    // may differ from the source, so we look up the merged track's id by uid.
-    let mut stmt = source.prepare(
-        "SELECT t.uid, l.source, l.plain, l.synced, l.instrumental
-		FROM lyrics l
-		JOIN tracks t ON t.id = l.track_id",
-    )?;
-
-    let rows: Vec<_> = stmt
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, Option<String>>(2)?,
-                row.get::<_, Option<String>>(3)?,
-                row.get::<_, bool>(4)?,
-            ))
-        })?
-        .filter_map(|r| r.ok())
-        .collect();
-
-    for (track_uid, source_name, plain, synced, instrumental) in rows {
-        let merged_track_id: Option<i64> = merged
-            .query_row(
-                "SELECT id FROM tracks WHERE uid = ?1",
-                params![track_uid],
-                |row| row.get(0),
-            )
-            .ok();
-
-        if let Some(track_id) = merged_track_id {
-            merged.execute(
-                "INSERT INTO lyrics (track_id, source, plain, synced, instrumental, source_lib_uid)
-				VALUES (?1,?2,?3,?4,?5,?6)
-				ON CONFLICT(track_id) DO UPDATE SET
-					source         = excluded.source,
-					plain          = excluded.plain,
-					synced         = excluded.synced,
-					instrumental   = excluded.instrumental,
-					source_lib_uid = excluded.source_lib_uid",
-                params![track_id, source_name, plain, synced, instrumental, lib_uid],
-            )?;
-        }
-    }
-    Ok(())
+fn copy_lyrics(
+	source: &Connection,
+	merged: &Connection,
+	lib_uid: &str,
+	filter: Option<&[String]>,
+) -> rusqlite::Result<()> {
+	for_each_chunk(filter, "t.uid", |clause, args| {
+		let sql = format!(
+			"SELECT t.uid, l.source, l.plain, l.synced, l.instrumental
+			FROM lyrics l
+			JOIN tracks t ON t.id = l.track_id{}",
+			clause
+		);
+		let mut stmt = source.prepare(&sql)?;
+		let mut rows = stmt.query(rusqlite::params_from_iter(args.iter()))?;
+		let mut find_id = merged.prepare_cached("SELECT id FROM tracks WHERE uid = ?1")?;
+		let mut insert = merged.prepare_cached(
+			"INSERT INTO lyrics (track_id, source, plain, synced, instrumental, source_lib_uid)
+			VALUES (?1,?2,?3,?4,?5,?6)
+			ON CONFLICT(track_id) DO UPDATE SET
+				source         = excluded.source,
+				plain          = excluded.plain,
+				synced         = excluded.synced,
+				instrumental   = excluded.instrumental,
+				source_lib_uid = excluded.source_lib_uid",
+		)?;
+		while let Some(row) = rows.next()? {
+			let track_uid: String = row.get(0)?;
+			let merged_track_id: Option<i64> = find_id
+				.query_row(params![track_uid], |r| r.get(0))
+				.ok();
+			if let Some(track_id) = merged_track_id {
+				let source_name: rusqlite::types::Value = row.get(1)?;
+				let plain: rusqlite::types::Value = row.get(2)?;
+				let synced: rusqlite::types::Value = row.get(3)?;
+				let instrumental: rusqlite::types::Value = row.get(4)?;
+				insert.execute(params![
+					track_id,
+					source_name,
+					plain,
+					synced,
+					instrumental,
+					lib_uid
+				])?;
+			}
+		}
+		Ok(())
+	})
 }
 
 // ─── Cleanup deleted records ──────────────────────────────────────────────────
 
-// After re-copying a changed library, remove any merged records attributed to
-// that library which no longer exist in the source. Handles deletes correctly.
 fn cleanup_deleted_records(
-    source: &Connection,
-    merged: &Connection,
-    lib_uid: &str,
+	source: &Connection,
+	merged: &Connection,
+	lib_uid: &str,
 ) -> Result<(), String> {
-    for table in &["tracks", "albums", "artists"] {
-        let source_uids: HashSet<String> = {
-            let mut stmt = source
-                .prepare(&format!("SELECT uid FROM {}", table))
-                .map_err(|e| e.to_string())?;
-            let result: HashSet<String> = stmt
-                .query_map([], |row| row.get::<_, String>(0))
-                .map_err(|e| e.to_string())?
-                .filter_map(|r| r.ok())
-                .collect();
-            result
-        };
+	for table in &["tracks", "albums", "artists"] {
+		let source_uids: HashSet<String> = {
+			let mut stmt = source
+				.prepare(&format!("SELECT uid FROM {}", table))
+				.map_err(|e| e.to_string())?;
+			let result: HashSet<String> = stmt
+				.query_map([], |row| row.get::<_, String>(0))
+				.map_err(|e| e.to_string())?
+				.filter_map(|r| r.ok())
+				.collect();
+			result
+		};
 
-        let merged_uids: Vec<String> = {
-            let mut stmt = merged
-                .prepare(&format!(
-                    "SELECT uid FROM {} WHERE source_lib_uid = ?1",
-                    table
-                ))
-                .map_err(|e| e.to_string())?;
-            let result: Vec<String> = stmt
-                .query_map(params![lib_uid], |row| row.get::<_, String>(0))
-                .map_err(|e| e.to_string())?
-                .filter_map(|r| r.ok())
-                .collect();
-            result
-        };
+		let merged_uids: Vec<String> = {
+			let mut stmt = merged
+				.prepare(&format!(
+					"SELECT uid FROM {} WHERE source_lib_uid = ?1",
+					table
+				))
+				.map_err(|e| e.to_string())?;
+			let result: Vec<String> = stmt
+				.query_map(params![lib_uid], |row| row.get::<_, String>(0))
+				.map_err(|e| e.to_string())?
+				.filter_map(|r| r.ok())
+				.collect();
+			result
+		};
 
-        for uid in merged_uids {
-            if !source_uids.contains(&uid) {
-                merged
-                    .execute(
-                        &format!(
-                            "DELETE FROM {} WHERE uid = ?1 AND source_lib_uid = ?2",
-                            table
-                        ),
-                        params![uid, lib_uid],
-                    )
-                    .map_err(|e| e.to_string())?;
-            }
-        }
-    }
-    Ok(())
+		let missing: Vec<String> = merged_uids
+			.into_iter()
+			.filter(|u| !source_uids.contains(u))
+			.collect();
+
+		if table == &"tracks" && !missing.is_empty() {
+			delete_merged_lyrics_for(merged, &missing)?;
+		}
+
+		let mut remove = merged
+			.prepare_cached(&format!(
+				"DELETE FROM {} WHERE uid = ?1 AND source_lib_uid = ?2",
+				table
+			))
+			.map_err(|e| e.to_string())?;
+		for uid in missing {
+			remove
+				.execute(params![uid, lib_uid])
+				.map_err(|e| e.to_string())?;
+		}
+	}
+	Ok(())
 }
 
 // ─── Remove all records from a library ───────────────────────────────────────
 
 fn remove_library_from_merged(merged: &Connection, lib_uid: &str) -> Result<(), String> {
-    for table in &["tracks", "albums", "artists"] {
-        merged
-            .execute(
-                &format!("DELETE FROM {} WHERE source_lib_uid = ?1", table),
-                params![lib_uid],
-            )
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(())
+	merged
+		.execute(
+			"DELETE FROM lyrics WHERE track_id IN (SELECT id FROM tracks WHERE source_lib_uid = ?1)",
+			params![lib_uid],
+		)
+		.map_err(|e| e.to_string())?;
+	for table in &["tracks", "albums", "artists"] {
+		merged
+			.execute(
+				&format!("DELETE FROM {} WHERE source_lib_uid = ?1", table),
+				params![lib_uid],
+			)
+			.map_err(|e| e.to_string())?;
+	}
+	Ok(())
 }
 
 // ─── is_local_override refresh ────────────────────────────────────────────────
 
-// After any merge pass, marks records where the default local library has
-// its own version. This tells the UI which records have local overrides.
 fn refresh_local_override_flags(merged: &Connection, default_lib_uid: &str) -> Result<(), String> {
-    for table in &["tracks", "albums", "artists"] {
-        merged
-            .execute(
-                &format!(
-                    "UPDATE {table} SET is_local_override = CASE
-						WHEN source_lib_uid = ?1 THEN 1
-						WHEN uid IN (SELECT uid FROM {table} WHERE source_lib_uid = ?1) THEN 1
-						ELSE 0
-					END"
-                ),
-                params![default_lib_uid],
-            )
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(())
+	for table in &["tracks", "albums", "artists"] {
+		merged
+			.execute(
+				&format!(
+					"UPDATE {} SET is_local_override = CASE WHEN source_lib_uid = ?1 THEN 1 ELSE 0 END",
+					table
+				),
+				params![default_lib_uid],
+			)
+			.map_err(|e| e.to_string())?;
+	}
+	Ok(())
+}
+
+// ─── Batch rename across all writable libraries ───────────────────────────────
+
+pub fn writable_libraries(profile_uid: &str) -> Result<Vec<Library>, String> {
+	let settings_conn = open_tuned(get_settings_db_path(profile_uid))?;
+	let libs = get_all_libraries(&settings_conn).map_err(|e| e.to_string())?;
+	Ok(libs
+		.into_iter()
+		.filter(|l| (l.is_default || l.has_write_permission) && std::path::Path::new(&l.file_path).exists())
+		.collect())
+}
+
+fn rename_artist_in_table(
+	conn: &Connection,
+	table: &str,
+	old_lower: &str,
+	new_name: &str,
+) -> Result<Vec<String>, String> {
+	let rows: Vec<(String, Option<String>, Option<String>)> = {
+		let mut stmt = conn
+			.prepare(&format!(
+				"SELECT uid, artists, album_artist FROM {} WHERE artists IS NOT NULL OR album_artist IS NOT NULL",
+				table
+			))
+			.map_err(|e| e.to_string())?;
+		let collected: Vec<(String, Option<String>, Option<String>)> = stmt
+			.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+			.map_err(|e| e.to_string())?
+			.filter_map(|r| r.ok())
+			.collect();
+		collected
+	};
+
+	let mut update = conn
+		.prepare_cached(&format!(
+			"UPDATE {} SET artists = ?1, album_artist = ?2 WHERE uid = ?3",
+			table
+		))
+		.map_err(|e| e.to_string())?;
+
+	let mut changed = Vec::new();
+
+	for (uid, artists, album_artist) in rows {
+		let mut dirty = false;
+		let mut new_artists = artists.clone();
+		let mut new_album_artist = album_artist.clone();
+
+		if let Some(ref json) = artists {
+			if let Ok(mut list) = serde_json::from_str::<Vec<serde_json::Value>>(json) {
+				for item in list.iter_mut() {
+					match item {
+						serde_json::Value::String(s) => {
+							if s.to_lowercase() == old_lower {
+								*s = new_name.to_string();
+								dirty = true;
+							}
+						}
+						serde_json::Value::Object(map) => {
+							let matches = map
+								.get("name")
+								.and_then(|n| n.as_str())
+								.map(|n| n.to_lowercase() == old_lower)
+								.unwrap_or(false);
+							if matches {
+								map.insert(
+									"name".to_string(),
+									serde_json::Value::String(new_name.to_string()),
+								);
+								dirty = true;
+							}
+						}
+						_ => {}
+					}
+				}
+				if dirty {
+					new_artists = Some(serde_json::to_string(&list).map_err(|e| e.to_string())?);
+				}
+			}
+		}
+
+		if let Some(ref aa) = album_artist {
+			if aa.to_lowercase() == old_lower {
+				new_album_artist = Some(new_name.to_string());
+				dirty = true;
+			}
+		}
+
+		if dirty {
+			update
+				.execute(params![new_artists, new_album_artist, uid])
+				.map_err(|e| e.to_string())?;
+			changed.push(uid);
+		}
+	}
+
+	Ok(changed)
+}
+
+pub fn rename_artist_everywhere(
+	profile_uid: &str,
+	old_name: &str,
+	new_name: &str,
+) -> Result<usize, String> {
+	let old_lower = old_name.trim().to_lowercase();
+	let new_name = new_name.trim();
+	if old_lower.is_empty() || new_name.is_empty() || old_lower == new_name.to_lowercase() {
+		return Ok(0);
+	}
+
+	let mut total = 0usize;
+	for lib in writable_libraries(profile_uid)? {
+		let conn = open_tuned(&lib.file_path)?;
+		let (tracks, albums) = {
+			let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+			let tracks = rename_artist_in_table(&conn, "tracks", &old_lower, new_name)?;
+			let albums = rename_artist_in_table(&conn, "albums", &old_lower, new_name)?;
+			tx.commit().map_err(|e| e.to_string())?;
+			(tracks, albums)
+		};
+		total += tracks.len() + albums.len();
+		sync_entities(profile_uid, &lib.uid, &tracks, &albums, &[])?;
+	}
+	Ok(total)
+}
+
+pub fn rename_album_everywhere(
+	profile_uid: &str,
+	old_name: &str,
+	new_name: &str,
+	album_artist: &str,
+	album_uid: Option<&str>,
+) -> Result<usize, String> {
+	let old_lower = old_name.trim().to_lowercase();
+	let new_name = new_name.trim();
+	let artist_lower = album_artist.trim().to_lowercase();
+	if old_lower.is_empty() || new_name.is_empty() || old_lower == new_name.to_lowercase() {
+		return Ok(0);
+	}
+	let target_uid = album_uid.filter(|u| !u.is_empty());
+
+	let mut total = 0usize;
+	for lib in writable_libraries(profile_uid)? {
+		let conn = open_tuned(&lib.file_path)?;
+
+		let rows: Vec<(String, String, Option<String>)> = {
+			let mut stmt = conn
+				.prepare("SELECT uid, albums, album_artist FROM tracks WHERE albums IS NOT NULL AND albums != '[]'")
+				.map_err(|e| e.to_string())?;
+			let collected: Vec<(String, String, Option<String>)> = stmt
+				.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+				.map_err(|e| e.to_string())?
+				.filter_map(|r| r.ok())
+				.collect();
+			collected
+		};
+
+		let mut changed: Vec<String> = Vec::new();
+		{
+			let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+			let mut update = conn
+				.prepare_cached("UPDATE tracks SET albums = ?1 WHERE uid = ?2")
+				.map_err(|e| e.to_string())?;
+
+			for (uid, albums_json, track_album_artist) in rows {
+				let mut list = match serde_json::from_str::<Vec<serde_json::Value>>(&albums_json) {
+					Ok(l) => l,
+					Err(_) => continue,
+				};
+				let artist_matches = track_album_artist
+					.as_deref()
+					.map(|a| a.trim().to_lowercase() == artist_lower)
+					.unwrap_or(artist_lower.is_empty());
+				let mut dirty = false;
+
+				for entry in list.iter_mut() {
+					let entry_uid = entry
+						.get("uid")
+						.and_then(|u| u.as_str())
+						.unwrap_or("")
+						.to_string();
+					let entry_name = entry
+						.get("name")
+						.and_then(|n| n.as_str())
+						.unwrap_or("")
+						.to_lowercase();
+
+					let is_target = match target_uid {
+						Some(t) if !entry_uid.is_empty() => entry_uid == t,
+						_ => entry_name == old_lower && artist_matches,
+					};
+
+					if is_target {
+						if let Some(obj) = entry.as_object_mut() {
+							obj.insert(
+								"name".to_string(),
+								serde_json::Value::String(new_name.to_string()),
+							);
+							dirty = true;
+						}
+					}
+				}
+
+				if dirty {
+					let out = serde_json::to_string(&list).map_err(|e| e.to_string())?;
+					update.execute(params![out, uid]).map_err(|e| e.to_string())?;
+					changed.push(uid);
+				}
+			}
+			drop(update);
+			tx.commit().map_err(|e| e.to_string())?;
+		}
+
+		total += changed.len();
+		sync_entities(profile_uid, &lib.uid, &changed, &[], &[])?;
+	}
+	Ok(total)
 }
 
 // ─── Write routing ────────────────────────────────────────────────────────────
@@ -656,7 +1034,7 @@ pub fn resolve_source_library(
         .map_err(|e| format!("Record not found in merged db: {}", e))?;
 
     let settings_conn =
-        Connection::open(get_settings_db_path(profile_uid)).map_err(|e| e.to_string())?;
+        open_tuned(get_settings_db_path(profile_uid)).map_err(|e| e.to_string())?;
 
     let lib = get_library_by_uid(&settings_conn, &source_lib_uid)
         .map_err(|e| e.to_string())?
@@ -675,13 +1053,13 @@ pub fn open_source_conn_for_entity(
     let (source_lib_uid, _) = resolve_source_library(profile_uid, entity_uid, entity_table)?;
 
     let settings_conn =
-        Connection::open(get_settings_db_path(profile_uid)).map_err(|e| e.to_string())?;
+        open_tuned(get_settings_db_path(profile_uid)).map_err(|e| e.to_string())?;
 
     let lib = get_library_by_uid(&settings_conn, &source_lib_uid)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Library not found: {}", source_lib_uid))?;
 
-    let conn = Connection::open(&lib.file_path).map_err(|e| e.to_string())?;
+    let conn = open_tuned(&lib.file_path).map_err(|e| e.to_string())?;
     Ok((conn, lib))
 }
 
@@ -700,6 +1078,8 @@ pub async fn try_push_library(lib: &Library) -> bool {
     fn is_remote_http(url: &str) -> bool {
         url.starts_with("http://") || url.starts_with("https://")
     }
+
+    checkpoint_db(&lib.file_path);
 
     if !is_remote_http(&sync_url) {
         match std::fs::copy(&lib.file_path, &sync_url) {
@@ -777,7 +1157,7 @@ pub async fn try_push_library(lib: &Library) -> bool {
 // and downloads the db file if newer. Returns Ok(true) if a pull occurred.
 pub async fn try_pull_library(profile_uid: &str, lib_uid: &str) -> Result<bool, String> {
     let settings_conn =
-        Connection::open(get_settings_db_path(profile_uid)).map_err(|e| e.to_string())?;
+        open_tuned(get_settings_db_path(profile_uid)).map_err(|e| e.to_string())?;
 
     let lib = get_library_by_uid(&settings_conn, lib_uid)
         .map_err(|e| e.to_string())?
@@ -809,6 +1189,7 @@ pub async fn try_pull_library(profile_uid: &str, lib_uid: &str) -> Result<bool, 
             }
         }
 
+        remove_wal_files(&lib.file_path);
         std::fs::copy(&sync_url, &lib.file_path)
             .map_err(|e| format!("Could not copy database file: {}", e))?;
     } else {
@@ -835,6 +1216,7 @@ pub async fn try_pull_library(profile_uid: &str, lib_uid: &str) -> Result<bool, 
             .await
             .map_err(|e| e.to_string())?;
 
+        remove_wal_files(&lib.file_path);
         std::fs::write(&lib.file_path, &bytes).map_err(|e| e.to_string())?;
     }
 
@@ -861,7 +1243,7 @@ pub async fn try_pull_library(profile_uid: &str, lib_uid: &str) -> Result<bool, 
 
 pub async fn check_write_permission(profile_uid: &str, lib_uid: &str) -> Result<bool, String> {
     let settings_conn =
-        Connection::open(get_settings_db_path(profile_uid)).map_err(|e| e.to_string())?;
+        open_tuned(get_settings_db_path(profile_uid)).map_err(|e| e.to_string())?;
 
     let lib = get_library_by_uid(&settings_conn, lib_uid)
         .map_err(|e| e.to_string())?
@@ -976,7 +1358,7 @@ pub async fn import_library(
     }
 
     let settings_conn =
-        Connection::open(get_settings_db_path(profile_uid)).map_err(|e| e.to_string())?;
+        open_tuned(get_settings_db_path(profile_uid)).map_err(|e| e.to_string())?;
 
     let existing_libs = get_all_libraries(&settings_conn).map_err(|e| e.to_string())?;
     let sort_order = existing_libs.len() as i64;
@@ -1015,12 +1397,13 @@ pub async fn import_library(
 
 pub fn export_library(profile_uid: &str, lib_uid: &str, dest_path: &str) -> Result<(), String> {
     let settings_conn =
-        Connection::open(get_settings_db_path(profile_uid)).map_err(|e| e.to_string())?;
+        open_tuned(get_settings_db_path(profile_uid)).map_err(|e| e.to_string())?;
 
     let lib = get_library_by_uid(&settings_conn, lib_uid)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Library not found: {}", lib_uid))?;
 
+    checkpoint_db(&lib.file_path);
     std::fs::copy(&lib.file_path, dest_path).map_err(|e| e.to_string())?;
 
     let now = std::time::SystemTime::now()
@@ -1044,11 +1427,11 @@ pub fn create_local_library(profile_uid: &str, name: &str) -> Result<Library, St
     let lib_uid = crate::db::generate_uid("lib");
     let file_path = get_library_db_path(profile_uid, &lib_uid);
 
-    let lib_conn = Connection::open(&file_path).map_err(|e| e.to_string())?;
+    let lib_conn = open_tuned(&file_path).map_err(|e| e.to_string())?;
     init_library_db(&lib_conn).map_err(|e| e.to_string())?;
 
     let settings_conn =
-        Connection::open(get_settings_db_path(profile_uid)).map_err(|e| e.to_string())?;
+        open_tuned(get_settings_db_path(profile_uid)).map_err(|e| e.to_string())?;
 
     let existing = get_all_libraries(&settings_conn).map_err(|e| e.to_string())?;
     let sort_order = existing.len() as i64;
@@ -1081,7 +1464,7 @@ pub fn delete_local_library(
     delete_file: bool,
 ) -> Result<(), String> {
     let settings_conn =
-        Connection::open(get_settings_db_path(profile_uid)).map_err(|e| e.to_string())?;
+        open_tuned(get_settings_db_path(profile_uid)).map_err(|e| e.to_string())?;
 
     let lib = get_library_by_uid(&settings_conn, lib_uid)
         .map_err(|e| e.to_string())?
@@ -1096,12 +1479,13 @@ pub fn delete_local_library(
 
     if delete_file && std::path::Path::new(&lib.file_path).exists() {
         std::fs::remove_file(&lib.file_path).map_err(|e| e.to_string())?;
+        remove_wal_files(&lib.file_path);
     }
 
     // Remove this library's records from merged
     let merged_path = get_merged_db_path(profile_uid);
     if merged_path.exists() {
-        let merged_conn = Connection::open(&merged_path).map_err(|e| e.to_string())?;
+        let merged_conn = open_tuned(&merged_path).map_err(|e| e.to_string())?;
         remove_library_from_merged(&merged_conn, lib_uid)?;
     }
 

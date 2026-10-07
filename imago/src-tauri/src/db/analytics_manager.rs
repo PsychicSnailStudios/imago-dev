@@ -155,6 +155,37 @@ pub fn get_all_scrobbles(conn: &Connection) -> Result<Vec<Scrobble>> {
     rows.collect()
 }
 
+pub fn get_scrobbles_since(conn: &Connection, since: i64) -> Result<Vec<Scrobble>> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {} FROM scrobbles WHERE timestamp >= ?1 ORDER BY timestamp DESC",
+        SELECT_COLS
+    ))?;
+    let rows = stmt.query_map(params![since], row_to_scrobble)?;
+    rows.collect()
+}
+
+pub fn get_recent_scrobbles(conn: &Connection, limit: i64) -> Result<Vec<Scrobble>> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {} FROM scrobbles ORDER BY timestamp DESC LIMIT ?1",
+        SELECT_COLS
+    ))?;
+    let rows = stmt.query_map(params![limit], row_to_scrobble)?;
+    rows.collect()
+}
+
+pub fn get_scrobbles_for_artist(
+    conn: &Connection,
+    artist_uid: &str,
+    min_duration: i64,
+) -> Result<Vec<Scrobble>> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {} FROM scrobbles WHERE artist_uid = ?1 AND duration_played >= ?2 ORDER BY timestamp DESC",
+        SELECT_COLS
+    ))?;
+    let rows = stmt.query_map(params![artist_uid, min_duration], row_to_scrobble)?;
+    rows.collect()
+}
+
 pub fn get_scrobbles_for_track(conn: &Connection, track_uid: &str) -> Result<Vec<Scrobble>> {
     let mut stmt = conn.prepare(&format!(
         "SELECT {} FROM scrobbles WHERE track_uid = ?1 ORDER BY timestamp DESC",

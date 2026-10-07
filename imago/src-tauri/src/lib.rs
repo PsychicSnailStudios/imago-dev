@@ -27,19 +27,22 @@ use tauri_plugin_deep_link::DeepLinkExt;
 // These are pub so command modules can use them via crate::open_*
 
 pub fn open_settings_conn(uid: &str) -> Connection {
-	Connection::open(get_settings_db_path(uid)).expect("Failed to open settings database")
+	let conn = Connection::open(get_settings_db_path(uid)).expect("Failed to open settings database");
+	library_manager::tune_conn(&conn);
+	conn
 }
 
 pub fn open_analytics_conn(uid: &str) -> Result<Connection, rusqlite::Error> {
 	let path = crate::profiles::get_user_dir(uid).join("analytics.db");
 	let conn = Connection::open(path)?;
+	library_manager::tune_conn(&conn);
 	db::analytics_manager::init_analytics_db(&conn)?;
 	Ok(conn)
 }
 
-// Legacy lib.db connection — used by fallback paths during migration.
 pub fn open_lib_conn(uid: &str) -> Connection {
 	let conn = Connection::open(get_lib_db_path(uid)).expect("Failed to open lib database");
+	library_manager::tune_conn(&conn);
 	let settings_path = get_settings_db_path(uid);
 	conn.execute_batch(&format!(
 		"ATTACH DATABASE '{}' AS settings;",
@@ -49,10 +52,10 @@ pub fn open_lib_conn(uid: &str) -> Connection {
 	conn
 }
 
-// Opens the default local library db (libraries/local.db) with settings attached.
 pub fn open_local_library_conn(uid: &str) -> Connection {
 	let path = get_local_library_db_path(uid);
 	let conn = Connection::open(&path).expect("Failed to open local library database");
+	library_manager::tune_conn(&conn);
 	let settings_path = get_settings_db_path(uid);
 	conn.execute_batch(&format!(
 		"ATTACH DATABASE '{}' AS settings;",
@@ -62,14 +65,14 @@ pub fn open_local_library_conn(uid: &str) -> Connection {
 	conn
 }
 
-// Opens the materialised merged read cache.
 pub fn open_merged_conn(uid: &str) -> Connection {
 	let path = crate::profiles::get_merged_db_path(uid);
-	// If merged.db doesn't exist yet fall back to lib.db so nothing crashes
 	if !path.exists() {
 		return open_lib_conn(uid);
 	}
-	Connection::open(&path).expect("Failed to open merged database")
+	let conn = Connection::open(&path).expect("Failed to open merged database");
+	library_manager::tune_conn(&conn);
+	conn
 }
 
 // ─── Small helpers ────────────────────────────────────────────────────────────
@@ -359,6 +362,7 @@ pub fn run() {
 			commands::albums::create_album_entry,
 			commands::albums::update_album_entry,
 			commands::albums::delete_album_entry,
+			commands::albums::rename_album_in_tracks_cmd,
 			// Artists
 			commands::artists::get_artists,
 			commands::artists::get_artist,
@@ -369,6 +373,7 @@ pub fn run() {
 			commands::artists::update_artist_entry,
 			commands::artists::delete_artist_entry,
 			commands::artists::get_artist_albums,
+			commands::artists::rename_artist_in_library_cmd,
 			// Playlists
 			commands::playlists::get_playlists,
 			commands::playlists::get_playlist,
@@ -399,6 +404,9 @@ pub fn run() {
 			// Scrobbles
 			commands::scrobbles::get_scrobbles,
 			commands::scrobbles::get_scrobbles_for_track,
+			commands::scrobbles::get_scrobbles_since,
+			commands::scrobbles::get_recent_scrobbles,
+			commands::scrobbles::get_scrobbles_for_artist,
 			commands::scrobbles::log_scrobble,
 			commands::scrobbles::update_scrobble,
 			commands::scrobbles::delete_scrobble,

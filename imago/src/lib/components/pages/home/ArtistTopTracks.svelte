@@ -33,7 +33,10 @@
 	async function load() {
 		loading = true;
 		try {
-			const scrobbles = await invoke<Scrobble[]>("get_scrobbles");
+			const scrobbles = await invoke<Scrobble[]>("get_scrobbles_for_artist", {
+				artistUid,
+				minDuration: MIN_DURATION_MS,
+			});
 
 			const relevant = scrobbles.filter(
 				s => s.artist_uid === artistUid && s.duration_played >= MIN_DURATION_MS
@@ -54,9 +57,10 @@
 					return [{ track, plays }];
 				});
 
+			const trackByUid = new Map(library.tracks.map((t) => [t.uid, t]));
 			const albumMap = new Map<string, number>();
 			for (const s of relevant) {
-				const track = library.tracks.find(t => t.uid === s.track_uid);
+				const track = trackByUid.get(s.track_uid);
 				if (!track) continue;
 				let albumUid = "";
 				try {

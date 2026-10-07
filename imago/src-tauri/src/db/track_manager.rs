@@ -387,29 +387,16 @@ pub fn get_track_artwork_by_uid(conn: &Connection, uid: &str) -> Result<Option<V
 pub fn find_duplicates(conn: &Connection) -> Result<Vec<DuplicateGroup>> {
     let mut stmt = conn.prepare(
 		"SELECT id, uid, path, last_modified, title, artists, album_artist, albums, genres, year, rating, tags, duration_ms, bpm, key, credits, label, format, bitrate, artwork_path, artwork_thumb, user_options, remote_path, remote_data, track_data, date_added
-		 FROM (
-			 SELECT a.id, a.uid, a.path, a.last_modified, a.title, a.artists, a.album_artist, a.albums, a.genres, a.year, a.rating, a.tags, a.duration_ms, a.bpm, a.key, a.credits, a.label, a.format, a.bitrate, a.artwork_path, a.artwork_thumb, a.user_options, a.remote_path, a.remote_data, a.track_data, a.date_added
-			 FROM tracks a
-			 INNER JOIN tracks b ON (
-				 a.id < b.id
-				 AND LOWER(TRIM(a.title)) = LOWER(TRIM(b.title))
-				 AND LOWER(TRIM(COALESCE(a.album_artist, JSON_EXTRACT(a.artists, '$[0]')))) = LOWER(TRIM(COALESCE(b.album_artist, JSON_EXTRACT(b.artists, '$[0]'))))
-				 AND ABS(COALESCE(a.duration_ms, 0) - COALESCE(b.duration_ms, 0)) <= 1000
-			 )
-			 UNION
-			 SELECT b.id, b.uid, b.path, b.last_modified, b.title, b.artists, b.album_artist, b.albums, b.genres, b.year, b.rating, b.tags, b.duration_ms, b.bpm, b.key, b.credits, b.label, b.format, b.bitrate, b.artwork_path, b.artwork_thumb, b.user_options, b.remote_path, b.remote_data, b.track_data, b.date_added
-			 FROM tracks a
-			 INNER JOIN tracks b ON (
-				 a.id < b.id
-				 AND LOWER(TRIM(a.title)) = LOWER(TRIM(b.title))
-				 AND LOWER(TRIM(COALESCE(a.album_artist, JSON_EXTRACT(a.artists, '$[0]')))) = LOWER(TRIM(COALESCE(b.album_artist, JSON_EXTRACT(b.artists, '$[0]'))))
-				 AND ABS(COALESCE(a.duration_ms, 0) - COALESCE(b.duration_ms, 0)) <= 1000
-			 )
-		 )
-		 ORDER BY title, album_artist, duration_ms"
+		 FROM tracks
+		 WHERE title IS NOT NULL AND LOWER(TRIM(title)) IN (
+			 SELECT LOWER(TRIM(title)) FROM tracks
+			 WHERE title IS NOT NULL AND TRIM(title) != ''
+			 GROUP BY LOWER(TRIM(title))
+			 HAVING COUNT(*) > 1
+		 )"
 	)?;
 
-    let all_tracks = stmt
+    let candidates = stmt
         .query_map([], |row| {
             Ok(Track {
                 id: row.get(0)?,
@@ -443,32 +430,76 @@ pub fn find_duplicates(conn: &Connection) -> Result<Vec<DuplicateGroup>> {
         })?
         .collect::<Result<Vec<_>>>()?;
 
+    let mut buckets: std::collections::HashMap<(String, String), Vec<Track>> =
+        std::collections::HashMap::new();
+
+    for t in candidates {
+        let title_key = t
+            .title
+            .as_deref()
+            .map(|s| s.trim().to_lowercase())
+            .unwrap_or_default();
+        let artist_source = t.album_artist.clone().or_else(|| {
+            t.artists
+                .as_deref()
+                .and_then(|s| serde_json::from_str::<Vec<String>>(s).ok())
+                .and_then(|v| v.into_iter().next())
+        });
+        let artist_key = artist_source
+            .map(|s| s.trim().to_lowercase())
+            .unwrap_or_default();
+        buckets.entry((title_key, artist_key)).or_default().push(t);
+    }
+
     let mut groups: Vec<DuplicateGroup> = Vec::new();
-    let mut i = 0;
-    while i < all_tracks.len() {
-        let mut group = vec![all_tracks[i].clone()];
-        let mut j = i + 1;
-        while j < all_tracks.len() {
-            let a = &all_tracks[i];
-            let b = &all_tracks[j];
-            let same_title = a.title.as_deref().map(|s| s.to_lowercase())
-                == b.title.as_deref().map(|s| s.to_lowercase());
-            let same_artist = a.album_artist.as_ref().map(|s| s.to_lowercase())
-                == b.album_artist.as_ref().map(|s| s.to_lowercase());
-            let duration_close = match (a.duration_ms, b.duration_ms) {
-                (Some(da), Some(db)) => (da - db).abs() <= 1000,
-                _ => false,
-            };
-            if same_title && same_artist && duration_close {
-                group.push(all_tracks[j].clone());
-                j += 1;
-            } else {
-                break;
+
+    for (_, mut tracks) in buckets {
+        if tracks.len() < 2 {
+            continue;
+        }
+        tracks.sort_by_key(|t| t.duration_ms.unwrap_or(i64::MIN));
+
+        let mut current: Vec<Track> = Vec::new();
+        let mut anchor: Option<i64> = None;
+
+        for t in tracks {
+            match (anchor, t.duration_ms) {
+                (Some(a), Some(d)) if (d - a).abs() <= 1000 => {
+                    current.push(t);
+                }
+                (_, Some(d)) => {
+                    if current.len() > 1 {
+                        groups.push(DuplicateGroup {
+                            tracks: std::mem::take(&mut current),
+                        });
+                    } else {
+                        current.clear();
+                    }
+                    anchor = Some(d);
+                    current.push(t);
+                }
+                (_, None) => {
+                    if current.len() > 1 {
+                        groups.push(DuplicateGroup {
+                            tracks: std::mem::take(&mut current),
+                        });
+                    } else {
+                        current.clear();
+                    }
+                    anchor = None;
+                }
             }
         }
-        groups.push(DuplicateGroup { tracks: group });
-        i = j;
+        if current.len() > 1 {
+            groups.push(DuplicateGroup { tracks: current });
+        }
     }
+
+    groups.sort_by(|a, b| {
+        let ta = a.tracks[0].title.as_deref().unwrap_or("").to_lowercase();
+        let tb = b.tracks[0].title.as_deref().unwrap_or("").to_lowercase();
+        ta.cmp(&tb)
+    });
 
     Ok(groups)
 }

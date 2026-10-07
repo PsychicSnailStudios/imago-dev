@@ -4,10 +4,54 @@ use crate::state::AppState;
 use tauri::State;
 
 #[tauri::command]
-pub fn get_scrobbles(state: State<AppState>) -> Result<Vec<Scrobble>, String> {
+pub async fn get_scrobbles(state: State<'_, AppState>) -> Result<Vec<Scrobble>, String> {
     let uid = state.get_uid();
-    let conn = open_analytics_conn(&uid).map_err(|e| e.to_string())?;
-    analytics_manager::get_all_scrobbles(&conn).map_err(|e| e.to_string())
+    crate::library_manager::run_blocking(move || {
+        let conn = open_analytics_conn(&uid).map_err(|e| e.to_string())?;
+        analytics_manager::get_all_scrobbles(&conn).map_err(|e| e.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn get_scrobbles_since(
+    state: State<'_, AppState>,
+    since: i64,
+) -> Result<Vec<Scrobble>, String> {
+    let uid = state.get_uid();
+    crate::library_manager::run_blocking(move || {
+        let conn = open_analytics_conn(&uid).map_err(|e| e.to_string())?;
+        analytics_manager::get_scrobbles_since(&conn, since).map_err(|e| e.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn get_recent_scrobbles(
+    state: State<'_, AppState>,
+    limit: i64,
+) -> Result<Vec<Scrobble>, String> {
+    let uid = state.get_uid();
+    crate::library_manager::run_blocking(move || {
+        let conn = open_analytics_conn(&uid).map_err(|e| e.to_string())?;
+        analytics_manager::get_recent_scrobbles(&conn, limit).map_err(|e| e.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn get_scrobbles_for_artist(
+    state: State<'_, AppState>,
+    artist_uid: String,
+    min_duration: i64,
+) -> Result<Vec<Scrobble>, String> {
+    let uid = state.get_uid();
+    crate::library_manager::run_blocking(move || {
+        let conn = open_analytics_conn(&uid).map_err(|e| e.to_string())?;
+        analytics_manager::get_scrobbles_for_artist(&conn, &artist_uid, min_duration)
+            .map_err(|e| e.to_string())
+    })
+    .await
 }
 
 #[tauri::command]

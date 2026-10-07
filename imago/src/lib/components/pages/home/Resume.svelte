@@ -101,7 +101,7 @@
 	}
 
 	async function loadRecentItems(): Promise<ResumeItem[]> {
-		const scrobbles = await invoke<Scrobble[]>("get_scrobbles");
+		const scrobbles = await invoke<Scrobble[]>("get_recent_scrobbles", { limit: SCROBBLE_SCAN_LIMIT });
 		const trackAlbumCache = new Map<string, string | null>();
 		const seen = new Set<string>();
 		const items: ResumeItem[] = [];

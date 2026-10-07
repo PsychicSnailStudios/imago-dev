@@ -53,13 +53,19 @@ pub fn update_library_cmd(
 }
 
 #[tauri::command]
-pub fn delete_library_cmd(
-    state: State<AppState>,
+pub async fn delete_library_cmd(
+    app: AppHandle,
+    state: State<'_, AppState>,
     lib_uid: String,
     delete_file: bool,
 ) -> Result<(), String> {
     let uid = state.get_uid();
-    library_manager::delete_local_library(&uid, &lib_uid, delete_file)
+    library_manager::run_blocking(move || {
+        library_manager::delete_local_library(&uid, &lib_uid, delete_file)?;
+        app.emit("library:updated", ()).ok();
+        Ok(())
+    })
+    .await
 }
 
 #[tauri::command]
@@ -71,7 +77,8 @@ pub async fn sync_library_cmd(
     let uid = state.get_uid();
     let pulled = library_manager::try_pull_library(&uid, &lib_uid).await?;
     if pulled {
-        library_manager::full_rebuild(&uid)?;
+        let rebuild_uid = uid.clone();
+        library_manager::run_blocking(move || library_manager::full_rebuild(&rebuild_uid)).await?;
         app.emit("library:updated", ()).ok();
     }
     Ok(pulled)
@@ -97,9 +104,9 @@ pub async fn check_write_permission_cmd(
 }
 
 #[tauri::command]
-pub fn rebuild_merged_cmd(state: State<AppState>) -> Result<MergeResult, String> {
+pub async fn rebuild_merged_cmd(state: State<'_, AppState>) -> Result<MergeResult, String> {
     let uid = state.get_uid();
-    library_manager::full_rebuild(&uid)
+    library_manager::run_blocking(move || library_manager::full_rebuild(&uid)).await
 }
 
 #[tauri::command]

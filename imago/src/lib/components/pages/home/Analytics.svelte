@@ -7,6 +7,7 @@
 	import { getAlbum, getArtist, getTrackArray } from "$ts/store/library.svelte";
 	import { setSelection } from "$ts/store/session.svelte";
 	import { scrobbleSignal } from "$ts/audio/scrobbler.svelte";
+	import { refreshScrobbles } from "$ts/audio/scrobbleCache";
 	import type { Track, Album, Artist } from "$ts/util/types";
     import { parseArtistsToString, parseAlbumEntries } from "$ts/util/parsers";
 
@@ -53,7 +54,7 @@
 	const MIN_DURATION_MS = 30_000;
 	const TOP_N_OPTIONS = [10, 25, 50, 100];
 
-	let allScrobbles = $state<Scrobble[]>([]);
+	let allScrobbles = $state.raw<Scrobble[]>([]);
 	let loading = $state(true);
 
 	let period = $state<Period>("week");
@@ -331,7 +332,7 @@
 
 	async function loadScrobbles() {
 		try {
-			allScrobbles = await invoke<Scrobble[]>("get_scrobbles");
+			allScrobbles = (await refreshScrobbles()) as Scrobble[];
 		} catch (e) {
 			console.error("Analytics failed to load", e);
 		} finally {

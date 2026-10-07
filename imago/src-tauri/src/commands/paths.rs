@@ -5,7 +5,7 @@ use crate::state::AppState;
 use crate::{open_local_library_conn, open_settings_conn};
 use rusqlite::Connection;
 use tauri::Manager;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 
 fn normalize_path(path: &str) -> String {
     path.replace('\\', "/")
@@ -169,85 +169,137 @@ pub fn add_path(
     Ok(())
 }
 
+fn path_key(path: &str) -> String {
+    path.replace('\\', "/").trim_end_matches('/').to_lowercase()
+}
+
+const NORMALISED_TRACK_PATH: &str = "LOWER(REPLACE(path, char(92), '/'))";
+
+fn delete_tracks_under_path(conn: &Connection, key: &str) -> rusqlite::Result<usize> {
+    let cond = format!(
+        "({n} = ?1 OR substr({n}, 1, length(?1) + 1) = ?1 || '/')",
+        n = NORMALISED_TRACK_PATH
+    );
+    conn.execute(
+        &format!(
+            "DELETE FROM lyrics WHERE track_id IN (SELECT id FROM tracks WHERE {})",
+            cond
+        ),
+        rusqlite::params![key],
+    )?;
+    conn.execute(
+        &format!("DELETE FROM tracks WHERE {}", cond),
+        rusqlite::params![key],
+    )
+}
+
+fn delete_library_path_row(conn: &Connection, key: &str) -> rusqlite::Result<usize> {
+    conn.execute(
+        "DELETE FROM library_paths WHERE LOWER(RTRIM(REPLACE(path, char(92), '/'), '/')) = ?1",
+        rusqlite::params![key],
+    )
+}
+
+fn delete_orphans(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute(
+        "DELETE FROM albums WHERE uid NOT IN (
+            SELECT DISTINCT json_extract(json_each.value, '$.uid')
+            FROM tracks, json_each(tracks.albums)
+            WHERE json_extract(json_each.value, '$.uid') IS NOT NULL
+            AND json_extract(json_each.value, '$.uid') != ''
+        )",
+        [],
+    )?;
+    conn.execute(
+        "DELETE FROM artists WHERE name NOT IN (
+            SELECT DISTINCT json_each.value
+            FROM tracks, json_each(tracks.artists)
+            WHERE tracks.artists IS NOT NULL AND tracks.artists != '[]'
+        ) AND name NOT IN (
+            SELECT DISTINCT album_artist FROM tracks WHERE album_artist IS NOT NULL
+        )",
+        [],
+    )?;
+    Ok(())
+}
+
 #[tauri::command]
-pub fn remove_path(state: State<AppState>, path: String) -> Result<(), String> {
-    let path = normalize_path(&path);
+pub async fn remove_path(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<(), String> {
     let uid = state.get_uid();
-    let settings_conn = open_settings_conn(&uid);
+    library_manager::run_blocking(move || remove_path_blocking(&app, &uid, &path)).await
+}
 
-    let lib_uid = get_lib_uid_for_path(&settings_conn, &path).or_else(|| {
-        let all_libs =
-            crate::db::library_registry::get_all_libraries(&settings_conn).unwrap_or_default();
-        for lib in &all_libs {
-            if let Ok(lc) = Connection::open(&lib.file_path) {
-                let found: bool = lc
-                    .query_row(
-                        "SELECT 1 FROM library_paths WHERE path = ?1",
-                        rusqlite::params![path],
-                        |_| Ok(true),
-                    )
-                    .unwrap_or(false);
-                if found {
-                    return Some(lib.uid.clone());
-                }
+fn remove_path_blocking(app: &AppHandle, uid: &str, raw_path: &str) -> Result<(), String> {
+    let key = path_key(raw_path);
+    if key.is_empty() {
+        return Err("Path is empty".to_string());
+    }
+
+    let settings_conn = open_settings_conn(uid);
+    let all_libs =
+        crate::db::library_registry::get_all_libraries(&settings_conn).map_err(|e| e.to_string())?;
+
+    let mut target: Option<crate::db::library_registry::Library> = None;
+    for lib in &all_libs {
+        if let Ok(lc) = library_manager::open_tuned(&lib.file_path) {
+            let has_path = get_paths_from_lib_db(&lc)
+                .unwrap_or_default()
+                .iter()
+                .any(|p| path_key(&p.path) == key);
+            if has_path {
+                target = Some(lib.clone());
+                break;
             }
-        }
-        None
-    });
-
-    if let Some(ref luid) = lib_uid {
-        let lib_path = crate::db::library_registry::get_library_by_uid(&settings_conn, luid)
-			.ok()
-			.flatten()
-			.map(|l| std::path::PathBuf::from(l.file_path))
-			.unwrap_or_else(|| get_library_db_path(&uid, luid));
-        
-        if let Ok(lib_conn) = Connection::open(&lib_path) {
-            remove_path_from_lib_db(&lib_conn, &path).ok();
-
-            lib_conn
-                .execute(
-                    "DELETE FROM tracks WHERE path LIKE ?1",
-                    rusqlite::params![format!("{}%", path)],
-                )
-                .ok();
-            lib_conn
-                .execute(
-                    "DELETE FROM albums WHERE uid NOT IN (
-					SELECT DISTINCT json_extract(json_each.value, '$.uid')
-					FROM tracks, json_each(tracks.albums)
-					WHERE json_extract(json_each.value, '$.uid') IS NOT NULL
-					AND json_extract(json_each.value, '$.uid') != ''
-				)",
-                    [],
-                )
-                .ok();
-            lib_conn
-                .execute(
-                    "DELETE FROM artists WHERE name NOT IN (
-					SELECT DISTINCT json_each.value
-					FROM tracks, json_each(tracks.artists)
-					WHERE tracks.artists IS NOT NULL AND tracks.artists != '[]'
-				) AND name NOT IN (
-					SELECT DISTINCT album_artist FROM tracks WHERE album_artist IS NOT NULL
-				)",
-                    [],
-                )
-                .ok();
-            let _ = library_manager::incremental_update(&uid, &[luid.clone()]);
-        }
-    } else {
-        if let Ok(lib_conn) = Connection::open(get_lib_db_path(&uid)) {
-            lib_conn
-                .execute(
-                    "DELETE FROM tracks WHERE path LIKE ?1",
-                    rusqlite::params![format!("{}%", path)],
-                )
-                .ok();
         }
     }
 
+    if target.is_none() {
+        if let Some(luid) = get_lib_uid_for_path(&settings_conn, &normalize_path(raw_path)) {
+            target = all_libs.iter().find(|l| l.uid == luid).cloned();
+        }
+    }
+
+    match target {
+        Some(lib) => {
+            let lib_conn = library_manager::open_tuned(&lib.file_path)?;
+            {
+                let tx = lib_conn.unchecked_transaction().map_err(|e| e.to_string())?;
+                delete_library_path_row(&lib_conn, &key).map_err(|e| e.to_string())?;
+                delete_tracks_under_path(&lib_conn, &key).map_err(|e| e.to_string())?;
+                delete_orphans(&lib_conn).map_err(|e| e.to_string())?;
+                tx.commit().map_err(|e| e.to_string())?;
+            }
+
+            let remaining: Vec<String> = get_paths_from_lib_db(&lib_conn)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|p| p.path)
+                .collect();
+
+            library_manager::incremental_update(uid, &[lib.uid.clone()])?;
+
+            if remaining.is_empty() {
+                crate::watcher::stop_watcher(uid, &lib.uid);
+            } else {
+                crate::watcher::start_watcher(app.clone(), uid.to_string(), lib.uid.clone(), remaining);
+            }
+        }
+        None => {
+            let lib_conn = open_lib_conn_legacy(uid)?;
+            delete_tracks_under_path(&lib_conn, &key).map_err(|e| e.to_string())?;
+        }
+    }
+
+    app.emit("library:updated", ()).ok();
     Ok(())
+}
+
+fn open_lib_conn_legacy(uid: &str) -> Result<Connection, String> {
+    library_manager::open_tuned(get_lib_db_path(uid))
 }
 
 #[tauri::command]

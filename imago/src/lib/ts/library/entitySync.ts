@@ -25,99 +25,28 @@ export async function renameArtistInLibrary(
 	newName: string
 ): Promise<void> {
 	if (!oldName || !newName || oldName.toLowerCase() === newName.toLowerCase()) return;
-
-	const [allTracks, allAlbums] = await Promise.all([
-		invoke<any[]>("get_tracks"),
-		invoke<any[]>("get_albums"),
-	]);
-
-	const oldLower = oldName.toLowerCase();
-
-	for (const track of allTracks) {
-		let changed = false;
-		const update: Record<string, any> = {};
-
-		const artistArr: string[] = parseJsonArray(track.artists);
-		const newArtistArr = artistArr.map((n) =>
-			n.toLowerCase() === oldLower ? newName : n
-		);
-		if (JSON.stringify(artistArr) !== JSON.stringify(newArtistArr)) {
-			update.artists = JSON.stringify(newArtistArr);
-			changed = true;
-		}
-
-		if ((track.album_artist ?? "").toLowerCase() === oldLower) {
-			update.album_artist = newName;
-			changed = true;
-		}
-
-		if (changed) {
-			await invoke("update_track_metadata", { uid: track.uid, update });
-		}
-	}
-
-	for (const album of allAlbums) {
-		let changed = false;
-		const update: Record<string, any> = {};
-
-		const artistArr: string[] = parseJsonArray(album.artists);
-		const newArtistArr = artistArr.map((n) =>
-			n.toLowerCase() === oldLower ? newName : n
-		);
-		if (JSON.stringify(artistArr) !== JSON.stringify(newArtistArr)) {
-			update.artists = JSON.stringify(newArtistArr);
-			changed = true;
-		}
-
-		if ((album.album_artist ?? "").toLowerCase() === oldLower) {
-			update.album_artist = newName;
-			changed = true;
-		}
-
-		if (changed) {
-			await invoke("update_album_entry", { uid: album.uid, update });
-		}
-	}
+	await invoke("rename_artist_in_library_cmd", { oldName, newName });
 }
 
 /**
- * Rewrite the name field inside every track's albums JSON entries where
- * the name matches oldName and album_artist matches. Call after an album
- * record's title changes.
+ * Rewrite the name field inside every track's albums JSON entries that
+ * belong to the renamed album. When albumUid is given, entries are matched
+ * by uid; otherwise by name and album artist. Call after an album record's
+ * title changes.
  */
 export async function renameAlbumInTracks(
 	oldName: string,
 	newName: string,
-	albumArtist: string
+	albumArtist: string,
+	albumUid: string | null = null
 ): Promise<void> {
 	if (!oldName || !newName || oldName.toLowerCase() === newName.toLowerCase()) return;
-
-	const allTracks = await invoke<any[]>("get_tracks");
-	const oldLower = oldName.toLowerCase();
-	const artistLower = albumArtist.toLowerCase();
-
-	for (const track of allTracks) {
-		const albumEntries: any[] = parseJsonArray(track.albums);
-		let changed = false;
-
-		const updated = albumEntries.map((entry) => {
-			if (
-				(entry.name ?? "").toLowerCase() === oldLower &&
-				(track.album_artist ?? "").toLowerCase() === artistLower
-			) {
-				changed = true;
-				return { ...entry, name: newName };
-			}
-			return entry;
-		});
-
-		if (changed) {
-			await invoke("update_track_metadata", {
-				uid: track.uid,
-				update: { albums: JSON.stringify(updated) },
-			});
-		}
-	}
+	await invoke("rename_album_in_tracks_cmd", {
+		oldName,
+		newName,
+		albumArtist: albumArtist ?? "",
+		albumUid,
+	});
 }
 
 // ─── AKA merge ────────────────────────────────────────────────────────────────

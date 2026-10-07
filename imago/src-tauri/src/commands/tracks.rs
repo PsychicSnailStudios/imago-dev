@@ -5,6 +5,10 @@ use crate::state::AppState;
 use crate::{open_lib_conn, open_local_library_conn, open_merged_conn, open_settings_conn};
 use tauri::{AppHandle, Emitter, State};
 
+fn blocking_err<T>(r: Result<T, rusqlite::Error>) -> Result<T, String> {
+    r.map_err(|e| e.to_string())
+}
+
 fn ensure_tag(conn: &rusqlite::Connection, tags: &Option<String>, genres: &Option<String>) {
     if let Some(ref s) = tags {
         if let Ok(names) = serde_json::from_str::<Vec<String>>(s) {
@@ -31,10 +35,13 @@ fn ensure_tag(conn: &rusqlite::Connection, tags: &Option<String>, genres: &Optio
 }
 
 #[tauri::command]
-pub fn get_tracks(state: State<AppState>) -> Result<Vec<Track>, String> {
+pub async fn get_tracks(state: State<'_, AppState>) -> Result<Vec<Track>, String> {
     let uid = state.get_uid();
-    let conn = open_merged_conn(&uid);
-    get_all_tracks(&conn).map_err(|e| e.to_string())
+    library_manager::run_blocking(move || {
+        let conn = open_merged_conn(&uid);
+        blocking_err(get_all_tracks(&conn))
+    })
+    .await
 }
 
 #[tauri::command]
@@ -57,46 +64,60 @@ pub fn get_track_artwork(state: State<AppState>, uid: String) -> Result<Option<V
 }
 
 #[tauri::command]
-pub fn get_duplicates(state: State<AppState>) -> Result<Vec<db::DuplicateGroup>, String> {
+pub async fn get_duplicates(state: State<'_, AppState>) -> Result<Vec<db::DuplicateGroup>, String> {
     let uid = state.get_uid();
-    let conn = open_merged_conn(&uid);
-    db::find_duplicates(&conn).map_err(|e| e.to_string())
+    library_manager::run_blocking(move || {
+        let conn = open_merged_conn(&uid);
+        blocking_err(db::find_duplicates(&conn))
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn update_track_metadata(
-    state: State<AppState>,
+pub async fn update_track_metadata(
+    state: State<'_, AppState>,
     uid: String,
     update: MetadataUpdate,
 ) -> Result<(), String> {
     let profile_uid = state.get_uid();
-    match library_manager::open_source_conn_for_entity(&profile_uid, &uid, "tracks") {
-        Ok((source_conn, lib)) => {
-            update_track_metadata_by_uid(&source_conn, &uid, &update).map_err(|e| e.to_string())?;
-            ensure_tag(&source_conn, &update.tags, &update.genres);
-            library_manager::incremental_update(&profile_uid, &[lib.uid])
-                .map_err(|e| e.to_string())?;
+    library_manager::run_blocking(move || {
+        match library_manager::open_source_conn_for_entity(&profile_uid, &uid, "tracks") {
+            Ok((source_conn, lib)) => {
+                update_track_metadata_by_uid(&source_conn, &uid, &update).map_err(|e| e.to_string())?;
+                ensure_tag(&source_conn, &update.tags, &update.genres);
+                library_manager::sync_track(&profile_uid, &lib.uid, &uid)?;
+            }
+            Err(_) => {
+                let conn = open_lib_conn(&profile_uid);
+                update_track_metadata_by_uid(&conn, &uid, &update).map_err(|e| e.to_string())?;
+            }
         }
-        Err(_) => {
-            let conn = open_lib_conn(&profile_uid);
-            update_track_metadata_by_uid(&conn, &uid, &update).map_err(|e| e.to_string())?;
-        }
-    }
-    Ok(())
+        Ok(())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn write_track_tags(
+pub async fn write_track_tags(
     app: AppHandle,
-    state: State<AppState>,
+    state: State<'_, AppState>,
+    uid: String,
+    path: String,
+    update: MetadataUpdate,
+) -> Result<(), String> {
+    let profile_uid = state.get_uid();
+    library_manager::run_blocking(move || write_track_tags_blocking(app, profile_uid, uid, path, update)).await
+}
+
+fn write_track_tags_blocking(
+    app: AppHandle,
+    profile_uid: String,
     uid: String,
     path: String,
     update: MetadataUpdate,
 ) -> Result<(), String> {
     use lofty::prelude::*;
     use lofty::probe::Probe;
-
-    let profile_uid = state.get_uid();
 
     let mut tagged_file = Probe::open(&path)
         .map_err(|e| e.to_string())?
@@ -163,8 +184,7 @@ pub fn write_track_tags(
         Ok((source_conn, lib)) => {
             update_track_metadata_by_uid(&source_conn, &uid, &update).map_err(|e| e.to_string())?;
             ensure_tag(&source_conn, &update.tags, &update.genres);
-            library_manager::incremental_update(&profile_uid, &[lib.uid])
-                .map_err(|e| e.to_string())?;
+            library_manager::sync_track(&profile_uid, &lib.uid, &uid)?;
         }
         Err(_) => {
             let conn = open_lib_conn(&profile_uid);
@@ -177,75 +197,87 @@ pub fn write_track_tags(
 }
 
 #[tauri::command]
-pub fn remove_track_from_library(state: State<AppState>, uid: String) -> Result<(), String> {
+pub async fn remove_track_from_library(state: State<'_, AppState>, uid: String) -> Result<(), String> {
     let profile_uid = state.get_uid();
-    match library_manager::open_source_conn_for_entity(&profile_uid, &uid, "tracks") {
-        Ok((source_conn, lib)) => {
-            db::delete_track_by_uid(&source_conn, &uid).map_err(|e| e.to_string())?;
-            library_manager::incremental_update(&profile_uid, &[lib.uid])
-                .map_err(|e| e.to_string())?;
+    library_manager::run_blocking(move || {
+        match library_manager::open_source_conn_for_entity(&profile_uid, &uid, "tracks") {
+            Ok((source_conn, lib)) => {
+                db::delete_track_by_uid(&source_conn, &uid).map_err(|e| e.to_string())?;
+                library_manager::sync_track(&profile_uid, &lib.uid, &uid)?;
+            }
+            Err(_) => {
+                let conn = open_lib_conn(&profile_uid);
+                db::delete_track_by_uid(&conn, &uid).map_err(|e| e.to_string())?;
+            }
         }
-        Err(_) => {
-            let conn = open_lib_conn(&profile_uid);
-            db::delete_track_by_uid(&conn, &uid).map_err(|e| e.to_string())?;
-        }
-    }
-    Ok(())
+        Ok(())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn delete_track_file(
+pub async fn delete_track_file(
     app: AppHandle,
-    state: State<AppState>,
+    state: State<'_, AppState>,
     uid: String,
     path: String,
 ) -> Result<(), String> {
     let profile_uid = state.get_uid();
-    std::fs::remove_file(&path).map_err(|e| e.to_string())?;
-    match library_manager::open_source_conn_for_entity(&profile_uid, &uid, "tracks") {
-        Ok((source_conn, lib)) => {
-            db::delete_track_by_uid(&source_conn, &uid).map_err(|e| e.to_string())?;
-            library_manager::incremental_update(&profile_uid, &[lib.uid])
-                .map_err(|e| e.to_string())?;
+    library_manager::run_blocking(move || {
+        std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+        match library_manager::open_source_conn_for_entity(&profile_uid, &uid, "tracks") {
+            Ok((source_conn, lib)) => {
+                db::delete_track_by_uid(&source_conn, &uid).map_err(|e| e.to_string())?;
+                library_manager::sync_track(&profile_uid, &lib.uid, &uid)?;
+            }
+            Err(_) => {
+                let conn = open_lib_conn(&profile_uid);
+                db::delete_track_by_uid(&conn, &uid).map_err(|e| e.to_string())?;
+            }
         }
-        Err(_) => {
-            let conn = open_lib_conn(&profile_uid);
-            db::delete_track_by_uid(&conn, &uid).map_err(|e| e.to_string())?;
-        }
-    }
-    app.emit("library:updated", ()).ok();
-    Ok(())
+        app.emit("library:updated", ()).ok();
+        Ok(())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn merge_remote_local_tracks(
+pub async fn merge_remote_local_tracks(
     app: AppHandle,
-    state: State<AppState>,
+    state: State<'_, AppState>,
     keep_uid: String,
     drop_uid: String,
 ) -> Result<(), String> {
     let profile_uid = state.get_uid();
-    match library_manager::open_source_conn_for_entity(&profile_uid, &keep_uid, "tracks") {
-        Ok((source_conn, lib)) => {
-            let drop_track = db::get_track_by_uid(&source_conn, &drop_uid)
-                .map_err(|e| e.to_string())?
-                .ok_or("Drop track not found")?;
-            crate::scanner::merge_paths_into_existing(&source_conn, &keep_uid, &drop_track);
-            db::delete_track_by_uid(&source_conn, &drop_uid).map_err(|e| e.to_string())?;
-            library_manager::incremental_update(&profile_uid, &[lib.uid])
-                .map_err(|e| e.to_string())?;
+    library_manager::run_blocking(move || {
+        match library_manager::open_source_conn_for_entity(&profile_uid, &keep_uid, "tracks") {
+            Ok((source_conn, lib)) => {
+                let drop_track = db::get_track_by_uid(&source_conn, &drop_uid)
+                    .map_err(|e| e.to_string())?
+                    .ok_or("Drop track not found")?;
+                crate::scanner::merge_paths_into_existing(&source_conn, &keep_uid, &drop_track);
+                db::delete_track_by_uid(&source_conn, &drop_uid).map_err(|e| e.to_string())?;
+                library_manager::sync_entities(
+                    &profile_uid,
+                    &lib.uid,
+                    &[keep_uid.clone(), drop_uid.clone()],
+                    &[],
+                    &[],
+                )?;
+            }
+            Err(_) => {
+                let conn = open_lib_conn(&profile_uid);
+                let drop_track = db::get_track_by_uid(&conn, &drop_uid)
+                    .map_err(|e| e.to_string())?
+                    .ok_or("Drop track not found")?;
+                crate::scanner::merge_paths_into_existing(&conn, &keep_uid, &drop_track);
+                db::delete_track_by_uid(&conn, &drop_uid).map_err(|e| e.to_string())?;
+            }
         }
-        Err(_) => {
-            let conn = open_lib_conn(&profile_uid);
-            let drop_track = db::get_track_by_uid(&conn, &drop_uid)
-                .map_err(|e| e.to_string())?
-                .ok_or("Drop track not found")?;
-            crate::scanner::merge_paths_into_existing(&conn, &keep_uid, &drop_track);
-            db::delete_track_by_uid(&conn, &drop_uid).map_err(|e| e.to_string())?;
-        }
-    }
-    app.emit("library:updated", ()).ok();
-    Ok(())
+        app.emit("library:updated", ()).ok();
+        Ok(())
+    })
+    .await
 }
 
 #[tauri::command]
@@ -330,8 +362,7 @@ pub async fn replace_track_path(
                 update_track_metadata_by_uid(&source_conn, &uid, &meta)
                     .map_err(|e| e.to_string())?;
             }
-            library_manager::incremental_update(&profile_uid, &[lib.uid])
-                .map_err(|e| e.to_string())?;
+            library_manager::sync_track(&profile_uid, &lib.uid, &uid)?;
         }
         Err(_) => {
             let lib_conn = open_lib_conn(&profile_uid);

@@ -3,9 +3,30 @@ use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watche
 use rusqlite::Connection;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::mpsc;
+use std::sync::{mpsc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
+
+static WATCHER_GENERATIONS: OnceLock<Mutex<HashMap<String, u64>>> = OnceLock::new();
+
+fn generations() -> &'static Mutex<HashMap<String, u64>> {
+    WATCHER_GENERATIONS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn bump_generation(key: &str) -> u64 {
+    let mut map = generations().lock().unwrap();
+    let next = map.get(key).copied().unwrap_or(0) + 1;
+    map.insert(key.to_string(), next);
+    next
+}
+
+fn current_generation(key: &str) -> u64 {
+    generations().lock().unwrap().get(key).copied().unwrap_or(0)
+}
+
+pub fn stop_watcher(profile_uid: &str, lib_uid: &str) {
+    bump_generation(&format!("{}:{}", profile_uid, lib_uid));
+}
 
 const AUDIO_EXTENSIONS: &[&str] = &["mp3", "flac", "ogg", "wav", "aac", "m4a", "opus", "aiff"];
 
@@ -27,6 +48,8 @@ fn is_remote_path(path: &str) -> bool {
 // lib_uid — which library db to write scanned tracks into
 // paths — the folders to watch
 pub fn start_watcher(app: AppHandle, profile_uid: String, lib_uid: String, paths: Vec<String>) {
+    let generation_key = format!("{}:{}", profile_uid, lib_uid);
+    let my_generation = bump_generation(&generation_key);
     std::thread::spawn(move || {
         let (tx, rx) = mpsc::channel::<notify::Result<Event>>();
         let mut watcher = RecommendedWatcher::new(
@@ -47,6 +70,9 @@ pub fn start_watcher(app: AppHandle, profile_uid: String, lib_uid: String, paths
         let debounce_duration = Duration::from_millis(3000);
 
         loop {
+            if current_generation(&generation_key) != my_generation {
+                break;
+            }
             match rx.recv_timeout(Duration::from_millis(500)) {
                 Ok(Ok(event)) => {
                     let now = Instant::now();
