@@ -4,6 +4,7 @@ pub mod connections;
 pub mod downloads;
 pub mod enrichment;
 pub mod libraries;
+pub mod manage;
 pub mod lyrics;
 pub mod paths;
 pub mod playlists;

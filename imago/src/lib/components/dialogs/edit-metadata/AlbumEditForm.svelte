@@ -18,7 +18,7 @@
 
 	import { closeEditModal } from "$ts/ui/editModal.svelte";
 	import { getAlbum, reloadLibrary } from "$ts/store/library.svelte";
-	import { syncArtists, pruneArtists, renameArtistInLibrary, renameAlbumInTracks } from "$ts/library/entitySync";
+	import { syncArtists, pruneArtists, renameAlbumInTracks } from "$ts/library/entitySync";
 	import { warnEmptyFields } from "$ts/ui/dialogManager.svelte";
 	import { tagStore } from "$ts/store/tagManager.svelte";
 	import { parseArtists } from "$ts/util/parsers";
@@ -97,26 +97,11 @@
 				await renameAlbumInTracks(originalTitle, title, albumArtist, uid);
 			}
 
-			if (originalAlbumArtist && albumArtist && originalAlbumArtist.toLowerCase() !== albumArtist.toLowerCase()) {
-				await renameArtistInLibrary(originalAlbumArtist, albumArtist);
-			}
-			const renamedArtists = originalArtists.filter((orig) => {
-				return !artistArr.map((x) => x.toLowerCase()).includes(orig.toLowerCase());
-			});
-			for (const oldName of renamedArtists) {
-				const matchingNew = artistArr.find(
-					(n) => !originalArtists.map((x) => x.toLowerCase()).includes(n.toLowerCase())
-				);
-				if (matchingNew) await renameArtistInLibrary(oldName, matchingNew);
+			if ((originalAlbumArtist ?? "").toLowerCase() !== (albumArtist ?? "").toLowerCase()) {
+				await invoke("set_album_artist_for_album_cmd", { albumUid: uid, newName: albumArtist });
 			}
 
 			await syncArtists(allNewNames);
-
-			const removedArtists = [
-				...originalArtists.filter((n) => !artistArr.map((x) => x.toLowerCase()).includes(n.toLowerCase())),
-				...(originalAlbumArtist && originalAlbumArtist !== albumArtist ? [originalAlbumArtist] : []),
-			];
-			await pruneArtists(removedArtists);
 
 			const update: Record<string, any> = {
 				title: title || null,
@@ -134,6 +119,13 @@
 			};
 
 			await invoke("update_album_entry", { uid, update });
+
+			const removedArtists = [
+				...originalArtists.filter((n) => !artistArr.map((x) => x.toLowerCase()).includes(n.toLowerCase())),
+				...(originalAlbumArtist && originalAlbumArtist !== albumArtist ? [originalAlbumArtist] : []),
+			];
+			await pruneArtists(removedArtists);
+
 			await reloadLibrary("albums");
 			await reloadLibrary("artists");
 			await reloadLibrary("tracks");

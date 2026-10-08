@@ -119,10 +119,8 @@
 			if (libraryRefreshTimer) clearTimeout(libraryRefreshTimer);
 			libraryRefreshTimer = setTimeout(() => {
 				libraryRefreshTimer = null;
-				reloadLibrary("tracks");
-				reloadLibrary("albums");
-				reloadLibrary("artists");
-				reloadLibrary("lyrics");
+				reloadLibrary("all");
+				reloadLibrary("tags");
 			}, 500);
 		});
 

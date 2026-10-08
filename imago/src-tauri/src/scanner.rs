@@ -262,8 +262,10 @@ fn parse_filename(path: &Path, custom_pattern: &str) -> FilenameMetadata {
         .unwrap_or("")
         .to_string();
 
-    if !custom_pattern.is_empty() {
-        return parse_custom_pattern(&stem, custom_pattern);
+    if !custom_pattern.trim().is_empty() {
+        if let Some(meta) = parse_custom_pattern(&stem, custom_pattern.trim()) {
+            return meta;
+        }
     }
 
 	let patterns: &[&[&str]] = &[
@@ -346,32 +348,76 @@ fn try_parse_pattern(stem: &str, pattern: &[&str]) -> Option<FilenameMetadata> {
     Some(meta)
 }
 
-fn parse_custom_pattern(stem: &str, pattern: &str) -> FilenameMetadata {
-    let delimiters: Vec<&str> = pattern
-        .split(|c: char| c == '{' || c == '}')
-        .filter(|s| !["title", "artist", "album", "year"].contains(s) && !s.is_empty())
-        .collect();
+const PATTERN_FIELDS: &[&str] = &["title", "artist", "album", "year", "track", "disc", "ignore"];
 
-    let fields: Vec<&str> = pattern
-        .split(|c: char| !c.is_alphanumeric() && c != '{' && c != '}')
-        .filter(|s| s.starts_with('{') && s.ends_with('}'))
-        .map(|s| s.trim_matches(|c| c == '{' || c == '}'))
-        .collect();
+enum PatternToken {
+    Literal(String),
+    Field(String),
+}
 
-    let mut remaining = stem;
-    let mut values: Vec<String> = Vec::new();
+fn tokenize_pattern(pattern: &str) -> Vec<PatternToken> {
+    let mut tokens: Vec<PatternToken> = Vec::new();
+    let mut literal = String::new();
+    let mut chars = pattern.chars();
 
-    for (i, delim) in delimiters.iter().enumerate() {
-        if i < fields.len() {
-            if let Some(pos) = remaining.find(delim) {
-                values.push(remaining[..pos].trim().to_string());
-                remaining = &remaining[pos + delim.len()..];
-            } else {
+    while let Some(c) = chars.next() {
+        if c != '{' {
+            literal.push(c);
+            continue;
+        }
+
+        let mut name = String::new();
+        let mut closed = false;
+        for n in chars.by_ref() {
+            if n == '}' {
+                closed = true;
                 break;
+            }
+            name.push(n);
+        }
+
+        let lowered = name.trim().to_lowercase();
+        if closed && PATTERN_FIELDS.contains(&lowered.as_str()) {
+            if !literal.is_empty() {
+                tokens.push(PatternToken::Literal(std::mem::take(&mut literal)));
+            }
+            tokens.push(PatternToken::Field(lowered));
+        } else {
+            literal.push('{');
+            literal.push_str(&name);
+            if closed {
+                literal.push('}');
             }
         }
     }
-    values.push(remaining.trim().to_string());
+
+    if !literal.is_empty() {
+        tokens.push(PatternToken::Literal(literal));
+    }
+    tokens
+}
+
+fn parse_leading_number(value: &str) -> Option<u32> {
+    let first = value.trim().split('/').next()?.trim();
+    if first.is_empty() || first.len() > 4 || !first.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    first.parse::<u32>().ok()
+}
+
+fn parse_custom_pattern(stem: &str, pattern: &str) -> Option<FilenameMetadata> {
+    let tokens = tokenize_pattern(pattern);
+    if !tokens.iter().any(|t| matches!(t, PatternToken::Field(_))) {
+        return None;
+    }
+
+    let mut rest: &str = stem;
+    let mut idx = 0;
+
+    if let Some(PatternToken::Literal(lead)) = tokens.first() {
+        rest = rest.strip_prefix(lead.as_str())?;
+        idx = 1;
+    }
 
     let mut meta = FilenameMetadata {
         title: None,
@@ -381,19 +427,102 @@ fn parse_custom_pattern(stem: &str, pattern: &str) -> FilenameMetadata {
         disc: None,
         track_number: None,
     };
-    for (i, field) in fields.iter().enumerate() {
-        if let Some(value) = values.get(i) {
-            match *field {
-                "title" => meta.title = Some(value.clone()),
-                "artist" => meta.artist = Some(value.clone()),
-                "album" => meta.album = Some(value.clone()),
-                "year" => meta.year = Some(value.clone()),
-                _ => {}
+
+    while idx < tokens.len() {
+        let field = match &tokens[idx] {
+            PatternToken::Field(f) => f.as_str(),
+            PatternToken::Literal(_) => return None,
+        };
+
+        let value: &str = match tokens.get(idx + 1) {
+            None => {
+                let v = rest;
+                rest = "";
+                idx += 1;
+                v
             }
+            Some(PatternToken::Literal(sep)) => {
+                let is_last = idx + 2 >= tokens.len();
+                if is_last {
+                    let v = rest.strip_suffix(sep.as_str())?;
+                    rest = "";
+                    idx += 2;
+                    v
+                } else {
+                    let pos = rest.find(sep.as_str())?;
+                    let v = &rest[..pos];
+                    rest = &rest[pos + sep.len()..];
+                    idx += 2;
+                    v
+                }
+            }
+            Some(PatternToken::Field(_)) => return None,
+        };
+
+        let value = value.trim();
+
+        match field {
+            "title" => meta.title = Some(value.to_string()).filter(|v| !v.is_empty()),
+            "artist" => meta.artist = Some(value.to_string()).filter(|v| !v.is_empty()),
+            "album" => meta.album = Some(value.to_string()).filter(|v| !v.is_empty()),
+            "year" => {
+                if value.len() == 4 && value.chars().all(|c| c.is_ascii_digit()) {
+                    meta.year = Some(value.to_string());
+                } else {
+                    return None;
+                }
+            }
+            "track" => meta.track_number = Some(parse_leading_number(value)?),
+            "disc" => meta.disc = Some(parse_leading_number(value)?),
+            _ => {}
         }
     }
 
-    meta
+    if !rest.trim().is_empty() {
+        return None;
+    }
+
+    Some(meta)
+}
+
+#[derive(serde::Serialize)]
+pub struct FilenamePreview {
+    pub matched: bool,
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub year: Option<String>,
+    pub track: Option<u32>,
+    pub disc: Option<u32>,
+}
+
+pub fn preview_filename_pattern(filename: &str, pattern: &str) -> FilenamePreview {
+    let stem = Path::new(filename)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(filename)
+        .to_string();
+
+    match parse_custom_pattern(&stem, pattern) {
+        Some(m) => FilenamePreview {
+            matched: true,
+            title: m.title,
+            artist: m.artist,
+            album: m.album,
+            year: m.year,
+            track: m.track_number,
+            disc: m.disc,
+        },
+        None => FilenamePreview {
+            matched: false,
+            title: None,
+            artist: None,
+            album: None,
+            year: None,
+            track: None,
+            disc: None,
+        },
+    }
 }
 
 fn is_year(s: &str) -> bool {
@@ -1009,6 +1138,7 @@ pub fn read_track_with_settings(
         _ => tag_album_val.or(filename_album_val),
     };
 
+    let tag_disc_number = tag_disc_number.or(filename_meta.disc);
     let folder_disc = if tag_disc_number.is_none() {
         parse_disc_from_folder(path)
     } else {

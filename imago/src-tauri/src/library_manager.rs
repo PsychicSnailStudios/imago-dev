@@ -922,6 +922,68 @@ pub fn rename_artist_everywhere(
 	Ok(total)
 }
 
+pub fn set_album_artist_for_album(
+	profile_uid: &str,
+	album_uid: &str,
+	new_name: &str,
+) -> Result<usize, String> {
+	let new_value: Option<String> = {
+		let trimmed = new_name.trim();
+		if trimmed.is_empty() {
+			None
+		} else {
+			Some(trimmed.to_string())
+		}
+	};
+	let pattern = format!("%{}%", album_uid);
+
+	let mut total = 0usize;
+	for lib in writable_libraries(profile_uid)? {
+		let conn = open_tuned(&lib.file_path)?;
+
+		let rows: Vec<(String, String)> = {
+			let mut stmt = conn
+				.prepare("SELECT uid, albums FROM tracks WHERE albums LIKE ?1")
+				.map_err(|e| e.to_string())?;
+			let collected: Vec<(String, String)> = stmt
+				.query_map(params![pattern], |row| Ok((row.get(0)?, row.get(1)?)))
+				.map_err(|e| e.to_string())?
+				.filter_map(|r| r.ok())
+				.collect();
+			collected
+		};
+
+		let mut changed: Vec<String> = Vec::new();
+		{
+			let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+			let mut update = conn
+				.prepare_cached("UPDATE tracks SET album_artist = ?1 WHERE uid = ?2")
+				.map_err(|e| e.to_string())?;
+			for (uid, albums_json) in rows {
+				let belongs = serde_json::from_str::<Vec<serde_json::Value>>(&albums_json)
+					.map(|list| {
+						list.iter().any(|e| {
+							e.get("uid").and_then(|u| u.as_str()) == Some(album_uid)
+						})
+					})
+					.unwrap_or(false);
+				if belongs {
+					update
+						.execute(params![new_value, uid])
+						.map_err(|e| e.to_string())?;
+					changed.push(uid);
+				}
+			}
+			drop(update);
+			tx.commit().map_err(|e| e.to_string())?;
+		}
+
+		total += changed.len();
+		sync_entities(profile_uid, &lib.uid, &changed, &[], &[])?;
+	}
+	Ok(total)
+}
+
 pub fn rename_album_everywhere(
 	profile_uid: &str,
 	old_name: &str,

@@ -16,3 +16,11 @@ pub fn save_setting(state: State<AppState>, key: String, value: String) -> Resul
     let conn = open_settings_conn(&uid);
     crate::db::set_setting(&conn, &key, &value).map_err(|e| e.to_string())
 }
+
+#[tauri::command]
+pub fn preview_filename_pattern_cmd(
+    filename: String,
+    pattern: String,
+) -> crate::scanner::FilenamePreview {
+    crate::scanner::preview_filename_pattern(&filename, pattern.trim())
+}
