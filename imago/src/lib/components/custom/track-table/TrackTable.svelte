@@ -179,7 +179,12 @@
 
 	function sortByNumber(a: Track, b: Track) {
 		if (playlistUid) return 0
-		return (parseAlbumEntries(a.albums)[0]?.track_number ?? 0) - (parseAlbumEntries(b.albums)[0]?.track_number ?? 0)
+		const numberFor = (t: Track) => {
+			const entries = parseAlbumEntries(t.albums)
+			const entry = albumUid ? entries.find((e) => e.uid === albumUid) : undefined
+			return (entry ?? entries[0])?.track_number ?? 0
+		}
+		return numberFor(a) - numberFor(b)
 	}
 
 	function handleTableClick(e: MouseEvent) {

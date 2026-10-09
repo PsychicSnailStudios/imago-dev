@@ -1,12 +1,33 @@
 import { parseAlbumEntries } from "$ts/util/parsers";
-import type { Track } from "$ts/util/types";
+import type { Track, TrackAlbumEntry } from "$ts/util/types";
 
-function albumUid(t: Track): string | null {
-	return parseAlbumEntries(t.albums)[0]?.uid ?? null;
+const albumEntryCache = new WeakMap<Track, TrackAlbumEntry[]>();
+
+function albumEntries(t: Track): TrackAlbumEntry[] {
+	let entries = albumEntryCache.get(t);
+	if (!entries) {
+		entries = parseAlbumEntries(t.albums).filter((e) => !!e.uid);
+		albumEntryCache.set(t, entries);
+	}
+	return entries;
 }
 
-function trackNum(t: Track): number | null {
-	return parseAlbumEntries(t.albums)[0]?.track_number ?? null;
+function albumRelation(a: Track, b: Track): { same: boolean; consecutive: boolean } {
+	const bEntries = albumEntries(b);
+	let same = false;
+	for (const ea of albumEntries(a)) {
+		const eb = bEntries.find((e) => e.uid === ea.uid);
+		if (!eb) continue;
+		same = true;
+		if (
+			ea.track_number != null &&
+			eb.track_number != null &&
+			Math.abs(ea.track_number - eb.track_number) === 1
+		) {
+			return { same: true, consecutive: true };
+		}
+	}
+	return { same, consecutive: false };
 }
 
 function albumArtist(t: Track): string | null {
@@ -57,20 +78,13 @@ function setsOverlap(a: Set<string>, b: Set<string>): boolean {
 // ─── Spaced Shuffle ───────────────────────────────────────────────────────────
 
 function adjacencyScore(a: Track, b: Track): number {
-	const aAlbum = albumUid(a);
-	const bAlbum = albumUid(b);
 	const aArtist = a.album_artist ?? null;
 	const bArtist = b.album_artist ?? null;
-	const aNum = trackNum(a);
-	const bNum = trackNum(b);
+	const relation = albumRelation(a, b);
 
-	if (
-		aAlbum && bAlbum && aAlbum === bAlbum &&
-		aNum !== null && bNum !== null &&
-		Math.abs(aNum - bNum) === 1
-	) return 3;
+	if (relation.consecutive) return 3;
 
-	if (aAlbum && bAlbum && aAlbum === bAlbum) return 2;
+	if (relation.same) return 2;
 
 	if (aArtist && bArtist && aArtist === bArtist) return 1;
 
@@ -141,18 +155,11 @@ export function spacedShuffle(tracks: Track[]): Track[] {
 function separationPenalty(a: Track, b: Track): number {
 	let score = 0;
 
-	const aAlbum = albumUid(a);
-	const bAlbum = albumUid(b);
-	const sameAlbum = aAlbum !== null && aAlbum === bAlbum;
+	const relation = albumRelation(a, b);
 
-	if (sameAlbum) {
-		const aNum = trackNum(a);
-		const bNum = trackNum(b);
-		if (aNum !== null && bNum !== null && Math.abs(aNum - bNum) === 1)
-			score += 40;
-	}
+	if (relation.consecutive) score += 40;
 
-	if (sameAlbum) score += 25;
+	if (relation.same) score += 25;
 
 	const aArtist = albumArtist(a);
 	const bArtist = albumArtist(b);

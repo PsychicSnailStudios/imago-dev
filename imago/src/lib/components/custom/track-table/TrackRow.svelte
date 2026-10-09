@@ -113,7 +113,11 @@
 		return num != null ? num.toString() : "#"
 	}
 
-	let firstAlbum = $derived(parseAlbumEntries(track.albums)[0] ?? null);
+	let firstAlbum = $derived.by(() => {
+		const entries = parseAlbumEntries(track.albums);
+		const match = sourceUid ? entries.find((e) => e.uid === sourceUid) : undefined;
+		return match ?? entries[0] ?? null;
+	});
 
 	async function goToAlbumArtist() {
 		if (!track.album_artist) return;
