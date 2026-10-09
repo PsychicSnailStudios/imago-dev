@@ -3,7 +3,7 @@
 	// COMPONENTS
    import { Loader2 } from "lucide-svelte";
 	import { Button } from "$shadcn/button/index.js";
-	import ScrollArea from "$shadcn/scroll-area/scroll-area.svelte";
+	import ScrollArea from "$lib/components/custom/ScrollView.svelte";
 	import * as Tabs from "$shadcn/tabs/index.js";
 
 	// SCRIPTS
