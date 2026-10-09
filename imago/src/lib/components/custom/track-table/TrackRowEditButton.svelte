@@ -5,7 +5,9 @@
 	import Button from "$shadcn/button/button.svelte";
 
 	import TrackPlaylistContent from "$lib/components/context-menus/AddTrackToPlaylist.svelte";
-	import { addTrackToQueue } from "$ts/audio/audioManager.svelte";
+	import { setSelection } from "$ts/store/session.svelte";
+	import { addTrackToQueue, removeFromQueue } from "$ts/audio/audioManager.svelte";
+   import { openEditModal } from "$ts/ui/editModal.svelte";
 	import { copySelectedNameToClipboard } from "$ts/store/trackSelection.svelte";
 	import type { Track } from "$ts/util/types";
 
@@ -38,6 +40,11 @@
 					<TrackPlaylistContent bind:this={content} {track} />
 				</DropdownMenu.SubContent>
 			</DropdownMenu.Sub>
+		</DropdownMenu.Group>
+		<DropdownMenu.Separator />
+		<DropdownMenu.Group>
+			<DropdownMenu.Item onSelect={() => setSelection(track.uid)}>Go to Track</DropdownMenu.Item>
+			<DropdownMenu.Item onSelect={() => openEditModal({ type: "track", uid: track!.uid })}>Edit Metadata</DropdownMenu.Item>
 		</DropdownMenu.Group>
 	</DropdownMenu.Content>
 </DropdownMenu.Root>
