@@ -150,12 +150,12 @@
 
 <Tabs.Content value="queue" class="relative flex-1 min-h-0">
 	<ScrollArea class="absolute inset-0 flex flex-col gap-2 p-1 min-h-0 min-w-0">
-		<p class="text-sm text-foreground">Now Playing</p>
+		<!-- <p class="text-sm text-foreground">Now Playing</p>
 		<div class="rounded-md border-2">
 			{#if player.track}
 				<QueueTrackItem track={player.track} isNowPlaying={true} allUpcomingUids={upcomingUids} />
 			{/if}
-		</div>
+		</div> -->
 
 		{#if upcomingTracks.length > 0}
 			<p class="text-sm text-foreground">Next up:</p>
