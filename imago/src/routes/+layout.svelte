@@ -16,6 +16,7 @@
 	import { ModeWatcher } from "mode-watcher";
 
 	import WarningDialog from "$lib/components/dialogs/WarnDialog.svelte";
+	import PruneArtistsDialog from "$lib/components/dialogs/PruneArtistsDialog.svelte";
 	import { dialogState, confirmDialog, cancelDialog } from "$ts/ui/dialogManager.svelte";
 
 	import circleLoader from '$lib/assets/circle-loader.json';
@@ -95,6 +96,7 @@
 	<EditModal />
 	<Toaster position="top-center" />
 	<WarningDialog bind:open={dialogState.open} title={dialogState.title} description={dialogState.description} onconfirm={confirmDialog} oncancel={cancelDialog} />
+	<PruneArtistsDialog />
 </div>
 
 <style>

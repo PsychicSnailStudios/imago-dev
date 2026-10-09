@@ -150,3 +150,16 @@ pub async fn set_album_artist_for_album_cmd(
     })
     .await
 }
+
+#[tauri::command]
+pub async fn rename_album_artist_cmd(
+    state: State<'_, AppState>,
+    old_name: String,
+    new_name: String,
+) -> Result<usize, String> {
+    let profile_uid = state.get_uid();
+    library_manager::run_blocking(move || {
+        library_manager::rename_album_artist_everywhere(&profile_uid, &old_name, &new_name)
+    })
+    .await
+}

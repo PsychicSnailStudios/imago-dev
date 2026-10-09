@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { showWarning } from "$ts/ui/dialogManager.svelte";
+import { showPrunePicker } from "$ts/ui/pruneDialog.svelte";
 import type {TrackAlbumEntry} from "$ts/util/types";
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
@@ -160,29 +160,18 @@ export async function pruneArtists(removedNames: string[]): Promise<boolean> {
 
 	if (toPrune.length === 0) return true;
 
-	const confirmed = await showPruneConfirmation(toPrune);
-	if (!confirmed) return false;
+	const chosen = await showPrunePicker(toPrune);
+	if (chosen === null) return false;
+	if (chosen.length === 0) return true;
 
-	for (const name of toPrune) {
-		const uid = nameToUid.get(name.toLowerCase());
-		if (uid) await invoke("delete_artist_entry", { uid });
+	const uids = chosen
+		.map((name) => nameToUid.get(name.toLowerCase()))
+		.filter((uid): uid is string => !!uid);
+	if (uids.length > 0) {
+		await invoke("delete_artists_cmd", { uids });
 	}
 
 	return true;
-}
-
-
-function showPruneConfirmation(artistNames: string[]): Promise<boolean> {
-	const count = artistNames.length;
-	const noun = count === 1 ? "artist is" : "artists are";
-	const message =
-		`${count} ${noun} no longer referenced by any track or album and would be deleted. ` +
-		`Do you want to remove ${count === 1 ? "it" : "them"}?`;
-
-	return showWarning({
-		title: "Remove unreferenced artists?",
-		description: message,
-	});
 }
 
 // ─── Album sync ───────────────────────────────────────────────────────────────

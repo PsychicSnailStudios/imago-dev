@@ -44,6 +44,7 @@
 		addPathToLibrary,
 	} from "$ts/library/libraryRegistry.svelte";
 	import { scanState } from "$ts/store/session.svelte";
+	import { showWarning } from "$ts/ui/dialogManager.svelte";
 	import { loadLibrary } from "$ts/store/library.svelte";
 
 	// ─── Per-library state ────────────────────────────────────────────────────────
@@ -141,6 +142,31 @@
 		lastScannedLibUid = libUid;
 		try {
 			await invoke("add_path", { path, libUid });
+		} catch (e) {
+			scanState.status = `Error: ${e}`;
+			scanState.loading = false;
+		} finally {
+			libStates[libUid].addingPath = false;
+		}
+	}
+
+	async function rescanPathMode(libUid: string, path: string, mode: "new" | "full" | "clear") {
+		if (mode === "clear") {
+			const confirmed = await showWarning({
+				title: "Clear and rescan this folder?",
+				description:
+					"Every track from this folder is removed from the library and scanned again. Manual edits, ratings, lyrics and playlist entries for those tracks are lost.",
+			});
+			if (!confirmed) return;
+		}
+		libStates[libUid].addingPath = true;
+		scanState.loading = true;
+		scanState.status = mode === "new" ? "Looking for new files…" : "Scanning…";
+		scanState.progress = 0;
+		scanState.total = 0;
+		lastScannedLibUid = libUid;
+		try {
+			await invoke("rescan_path_cmd", { path, mode });
 		} catch (e) {
 			scanState.status = `Error: ${e}`;
 			scanState.loading = false;
@@ -594,21 +620,34 @@
 										<div class="flex items-center gap-2 rounded px-2 py-1.5 text-xs bg-background border">
 											<FolderOpen class="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
 											<span class="truncate flex-1 font-mono">{p.path}</span>
-											<Tooltip.Root>
-												<Tooltip.Trigger
+											<DropdownMenu.Root>
+												<DropdownMenu.Trigger
 													class={buttonVariants({ variant: "ghost", size: "sm" })}
 													style="height:1.5rem;width:1.5rem;padding:0;"
 													disabled={scanState.loading || s.addingPath}
-													onclick={() => rescanPath(lib.uid, p.path)}
 												>
 													{#if s.addingPath}
 														<Loader2 class="w-3 h-3 animate-spin" />
 													{:else}
 														<RefreshCw class="w-3 h-3" />
 													{/if}
-												</Tooltip.Trigger>
-												<Tooltip.Content><p>Rescan this folder</p></Tooltip.Content>
-											</Tooltip.Root>
+												</DropdownMenu.Trigger>
+												<DropdownMenu.Content align="end">
+													<DropdownMenu.Item onclick={() => rescanPathMode(lib.uid, p.path, "new")}>
+														Scan for new files
+													</DropdownMenu.Item>
+													<DropdownMenu.Item onclick={() => rescanPathMode(lib.uid, p.path, "full")}>
+														Rescan everything
+													</DropdownMenu.Item>
+													<DropdownMenu.Separator />
+													<DropdownMenu.Item
+														class="text-destructive focus:text-destructive"
+														onclick={() => rescanPathMode(lib.uid, p.path, "clear")}
+													>
+														Clear and rescan
+													</DropdownMenu.Item>
+												</DropdownMenu.Content>
+											</DropdownMenu.Root>
 											<Button
 												variant="ghost"
 												size="sm"

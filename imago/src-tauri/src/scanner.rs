@@ -1818,7 +1818,33 @@ pub fn default_library_conn_if_other(conn: &Connection) -> Option<Connection> {
 	Some(other)
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ScanMode {
+    Full,
+    NewOnly,
+}
+
 pub fn scan_directory_with_progress(conn: &Connection, dir: &str, app: &AppHandle) {
+    scan_directory_impl(conn, dir, app, ScanMode::Full);
+}
+
+pub fn scan_directory_new_only(conn: &Connection, dir: &str, app: &AppHandle) {
+    scan_directory_impl(conn, dir, app, ScanMode::NewOnly);
+}
+
+fn known_track_stamps(conn: &Connection) -> std::collections::HashMap<String, i64> {
+    let mut known = std::collections::HashMap::new();
+    if let Ok(mut stmt) = conn.prepare("SELECT path, last_modified FROM tracks WHERE path != ''") {
+        if let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))) {
+            for row in rows.flatten() {
+                known.insert(row.0.replace('\\', "/").to_lowercase(), row.1);
+            }
+        }
+    }
+    known
+}
+
+fn scan_directory_impl(conn: &Connection, dir: &str, app: &AppHandle, mode: ScanMode) {
     conn.execute_batch(
         "PRAGMA journal_mode = WAL;
 		 PRAGMA synchronous = NORMAL;
@@ -1905,12 +1931,23 @@ pub fn scan_directory_with_progress(conn: &Connection, dir: &str, app: &AppHandl
         .unwrap_or_else(|| GENRE_DELIMITERS.iter().map(|s| s.to_string()).collect());
     let genre_delimiters: Vec<&str> = genre_delimiters_owned.iter().map(|s| s.as_str()).collect();
 
-    let all_files: Vec<_> = WalkDir::new(dir)
+    let mut all_files: Vec<_> = WalkDir::new(dir)
         .follow_links(true)
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file() && is_supported(e.path()))
         .collect();
+
+    if mode == ScanMode::NewOnly {
+        let known = known_track_stamps(conn);
+        all_files.retain(|e| {
+            let key = e.path().to_string_lossy().replace('\\', "/").to_lowercase();
+            match known.get(&key) {
+                Some(stamp) => *stamp != get_last_modified(e.path()),
+                None => true,
+            }
+        });
+    }
 
     let total = all_files.len();
     let mut scanned = 0;

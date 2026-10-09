@@ -98,6 +98,9 @@
 			}
 
 			if ((originalAlbumArtist ?? "").toLowerCase() !== (albumArtist ?? "").toLowerCase()) {
+				if (originalAlbumArtist) {
+					await invoke("rename_album_artist_cmd", { oldName: originalAlbumArtist, newName: albumArtist });
+				}
 				await invoke("set_album_artist_for_album_cmd", { albumUid: uid, newName: albumArtist });
 			}
 

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Trash, CloudDownload, FolderInput, Loader2, ChevronLeft, ChevronRight } from "lucide-svelte";
+	import { Trash, CloudDownload, FolderInput, Loader2, ChevronLeft, ChevronRight, Merge } from "lucide-svelte";
 
 	import * as Tabs from "$shadcn/tabs/index.js";
 	import * as Tooltip from "$shadcn/tooltip/index.js";
@@ -13,6 +13,7 @@
 	import ArtistRow from "$lib/components/pages/library-manager/ArtistRow.svelte";
 	import DuplicateGroupCard from "$lib/components/pages/library-manager/DuplicateGroupCard.svelte";
 	import AddToAlbumDialog from "$lib/components/dialogs/AddToAlbumDialog.svelte";
+	import MergeDialog from "$lib/components/dialogs/MergeDialog.svelte";
 	import TagManager from "$lib/components/pages/library-manager/TagManager.svelte";
 	import LibraryDatabaseManager from "$lib/components/pages/library-manager/LibraryDatabaseManager.svelte";
 	import BlocklistDialog from "$lib/components/dialogs/BlocklistDialog.svelte";
@@ -25,6 +26,7 @@
 	} from "$ts/library/libraryManager";
 	import { enrichAlbums, enrichArtists, enrichTracks, enrichAllAlbums, enrichAllArtists, enrichAllTracks } from "$ts/library/enrichment";
 	import { searchTracks, searchAlbums, searchArtists, onLibraryChange } from "$ts/store/library.svelte";
+	import { parseAlbumEntries } from "$ts/util/parsers";
 	import type { DuplicateGroup, Track, Album, Artist } from "$ts/util/types";
 	import { scanState } from "$ts/store/session.svelte";
 
@@ -34,7 +36,14 @@
 	let artistSearch = $state("");
 
 	// ─── Track filter mode ────────────────────────────────────────────────────────
-	type TrackFilterMode = "all" | "ghosts" | "remote" | "local";
+	type TrackFilterMode = "all" | "ghosts" | "remote" | "local" | "noalbum";
+	const FILTER_LABELS: Record<TrackFilterMode, string> = {
+		all: "All",
+		ghosts: "Ghosts",
+		remote: "Remote",
+		local: "Local",
+		noalbum: "No album",
+	};
 	let trackFilterMode = $state<TrackFilterMode>("all");
 
 	// ─── Duplicates ───────────────────────────────────────────────────────────────
@@ -63,6 +72,7 @@
 		if (trackFilterMode === "ghosts") pool = pool.filter((t) => !t.remote_path && (!t.path || t.path === t.uid));
 		else if (trackFilterMode === "remote") pool = pool.filter((t) => !!t.remote_path);
 		else if (trackFilterMode === "local") pool = pool.filter((t) => !!t.path && t.path !== t.uid && !t.remote_path);
+		else if (trackFilterMode === "noalbum") pool = pool.filter((t) => !parseAlbumEntries(t.albums as any).some((e) => !!e.name?.trim() || !!e.uid));
 		filteredTracks = pool;
 	}
 
@@ -173,6 +183,22 @@
 	function shiftArtist(index: number) {
 		artistSelections = shiftSelectRange(filteredArtists, index, lastArtistIndex, artistSelections);
 		lastArtistIndex = index;
+	}
+
+	// ─── Merge ────────────────────────────────────────────────────────────────────
+	let mergeOpen = $state(false);
+	let mergeKind = $state<"artists" | "albums">("artists");
+	let mergeUids = $state<string[]>([]);
+
+	function openMerge(kind: "artists" | "albums") {
+		mergeKind = kind;
+		mergeUids = kind === "artists" ? [...selectedArtistUids] : [...selectedAlbumUids];
+		mergeOpen = true;
+	}
+
+	function onMerged() {
+		albumSelections = {};
+		artistSelections = {};
 	}
 
 	// ─── Bulk actions ─────────────────────────────────────────────────────────────
@@ -306,9 +332,9 @@
 						</div>
 
 						<div class="flex gap-1 flex-wrap">
-							{#each (["all","ghosts","remote","local"] as const) as mode}
+							{#each (["all","ghosts","remote","local","noalbum"] as const) as mode}
 								<Button variant={trackFilterMode === mode ? "default" : "outline"} size="sm" onclick={() => trackFilterMode = mode}>
-									{mode.charAt(0).toUpperCase() + mode.slice(1)}
+									{FILTER_LABELS[mode]}
 								</Button>
 							{/each}
 						</div>
@@ -418,6 +444,16 @@
 									<Tooltip.Root>
 										<Tooltip.Trigger
 											class={buttonVariants({ variant: "outline", size: "sm" })}
+											onclick={() => openMerge("albums")}
+											disabled={selectedAlbumUids.length < 2}
+										>
+											<Merge class="w-4 h-4 mr-1" /> Merge
+										</Tooltip.Trigger>
+										<Tooltip.Content><p>Merge selected albums into one</p></Tooltip.Content>
+									</Tooltip.Root>
+									<Tooltip.Root>
+										<Tooltip.Trigger
+											class={buttonVariants({ variant: "outline", size: "sm" })}
 											onclick={bulkEnrichAlbums}
 											disabled={scanState.enriching}
 										>
@@ -483,6 +519,16 @@
 									<Tooltip.Root>
 										<Tooltip.Trigger
 											class={buttonVariants({ variant: "outline", size: "sm" })}
+											onclick={() => openMerge("artists")}
+											disabled={selectedArtistUids.length < 2}
+										>
+											<Merge class="w-4 h-4 mr-1" /> Merge
+										</Tooltip.Trigger>
+										<Tooltip.Content><p>Merge selected artists into one</p></Tooltip.Content>
+									</Tooltip.Root>
+									<Tooltip.Root>
+										<Tooltip.Trigger
+											class={buttonVariants({ variant: "outline", size: "sm" })}
 											onclick={bulkEnrichArtists}
 											disabled={scanState.enriching}
 										>
@@ -544,4 +590,5 @@
 </div>
 
 <AddToAlbumDialog bind:open={addToAlbumOpen} trackUids={selectedTrackUids} />
+<MergeDialog bind:open={mergeOpen} kind={mergeKind} uids={mergeUids} onmerged={onMerged} />
 <BlocklistDialog />

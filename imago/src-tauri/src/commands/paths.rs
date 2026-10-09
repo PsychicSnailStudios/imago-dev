@@ -302,6 +302,107 @@ fn open_lib_conn_legacy(uid: &str) -> Result<Connection, String> {
     library_manager::open_tuned(get_lib_db_path(uid))
 }
 
+fn find_library_for_path(
+    uid: &str,
+    key: &str,
+) -> Result<crate::db::library_registry::Library, String> {
+    let settings_conn = open_settings_conn(uid);
+    let all_libs =
+        crate::db::library_registry::get_all_libraries(&settings_conn).map_err(|e| e.to_string())?;
+    for lib in all_libs {
+        if let Ok(lc) = library_manager::open_tuned(&lib.file_path) {
+            let has_path = get_paths_from_lib_db(&lc)
+                .unwrap_or_default()
+                .iter()
+                .any(|p| path_key(&p.path) == key);
+            if has_path {
+                return Ok(lib);
+            }
+        }
+    }
+    Err("This folder is not registered in any library".to_string())
+}
+
+#[tauri::command]
+pub fn rescan_path_cmd(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+    mode: String,
+) -> Result<(), String> {
+    let uid = state.get_uid();
+    let key = path_key(&path);
+    if key.is_empty() {
+        return Err("Path is empty".to_string());
+    }
+    if mode != "new" && mode != "full" && mode != "clear" {
+        return Err(format!("Unknown rescan mode: {}", mode));
+    }
+
+    let lib = find_library_for_path(&uid, &key)?;
+    let scan_path = normalize_path(&path);
+
+    std::thread::spawn(move || {
+        let lib_conn = match library_manager::open_tuned(&lib.file_path) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("[rescan_path] open library failed: {e}");
+                app.emit("scan:done", ()).ok();
+                return;
+            }
+        };
+        let settings_path = get_settings_db_path(&uid);
+        lib_conn
+            .execute_batch(&format!(
+                "ATTACH DATABASE '{}' AS settings;",
+                settings_path.to_string_lossy().replace('\'', "''")
+            ))
+            .ok();
+
+        if mode == "clear" {
+            let cleared = lib_conn
+                .unchecked_transaction()
+                .and_then(|tx| {
+                    delete_tracks_under_path(&lib_conn, &key)?;
+                    delete_orphans(&lib_conn)?;
+                    tx.commit()
+                });
+            if let Err(e) = cleared {
+                eprintln!("[rescan_path] clear failed: {e}");
+                app.emit("scan:done", ()).ok();
+                return;
+            }
+            if let Err(e) = library_manager::incremental_update(&uid, &[lib.uid.clone()]) {
+                eprintln!("[rescan_path] merge after clear failed: {e}");
+            }
+            app.emit("library:updated", ()).ok();
+        }
+
+        if mode == "new" {
+            crate::scanner::scan_directory_new_only(&lib_conn, &scan_path, &app);
+        } else {
+            crate::scanner::scan_directory_with_progress(&lib_conn, &scan_path, &app);
+        }
+
+        if let Err(e) = library_manager::incremental_update(&uid, &[lib.uid.clone()]) {
+            eprintln!("[rescan_path] merge failed: {e}");
+        }
+        app.emit("library:updated", ()).ok();
+        spawn_post_scan_tasks(app.clone(), uid.clone());
+
+        let remaining: Vec<String> = get_paths_from_lib_db(&lib_conn)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|p| p.path)
+            .collect();
+        if !remaining.is_empty() {
+            crate::watcher::start_watcher(app, uid, lib.uid.clone(), remaining);
+        }
+    });
+
+    Ok(())
+}
+
 #[tauri::command]
 pub fn get_paths(state: State<AppState>) -> Result<Vec<LibraryPath>, String> {
     let uid = state.get_uid();

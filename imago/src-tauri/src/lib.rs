@@ -341,6 +341,7 @@ pub fn run() {
 			commands::paths::get_paths,
 			commands::paths::get_paths_for_library,
 			commands::paths::rescan,
+			commands::paths::rescan_path_cmd,
 			// Tracks
 			commands::tracks::get_tracks,
 			commands::tracks::get_track,
@@ -364,6 +365,7 @@ pub fn run() {
 			commands::albums::delete_album_entry,
 			commands::albums::rename_album_in_tracks_cmd,
 			commands::albums::set_album_artist_for_album_cmd,
+			commands::albums::rename_album_artist_cmd,
 			// Artists
 			commands::artists::get_artists,
 			commands::artists::get_artist,
@@ -390,6 +392,8 @@ pub fn run() {
 			commands::manage::delete_tracks_cmd,
 			commands::manage::delete_albums_cmd,
 			commands::manage::delete_artists_cmd,
+			commands::manage::merge_artists_cmd,
+			commands::manage::merge_albums_cmd,
 			commands::settings::preview_filename_pattern_cmd,
 			// Enrichment
 			commands::enrichment::enrich_track,

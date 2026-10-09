@@ -1,3 +1,5 @@
+use crate::db::album_manager::{update_album_by_uid, AlbumUpdate};
+use crate::db::artist_manager::{update_artist_by_uid, ArtistUpdate};
 use crate::db::library_registry::{get_library_by_uid, Library};
 use crate::library_manager;
 use crate::state::AppState;
@@ -340,4 +342,292 @@ pub async fn delete_artists_cmd(
 	let profile_uid = state.get_uid();
 	library_manager::run_blocking(move || delete_entities(&profile_uid, Kind::Artists, &uids, false))
 		.await
+}
+
+fn ensure_writable(lib: &Library, what: &str) -> Result<(), String> {
+	if lib.is_default || lib.has_write_permission {
+		Ok(())
+	} else {
+		Err(format!("{} belongs to a read-only library", what))
+	}
+}
+
+fn copy_image_columns(
+	profile_uid: &str,
+	table: &str,
+	columns: &[&str],
+	from_uid: &str,
+	target: &Connection,
+	target_uid: &str,
+) -> Result<(), String> {
+	let (from_conn, _) = library_manager::open_source_conn_for_entity(profile_uid, from_uid, table)
+		.map_err(|e| e.to_string())?;
+	let select = format!("SELECT {} FROM {} WHERE uid = ?1", columns.join(", "), table);
+	let mut values: Vec<rusqlite::types::Value> = from_conn
+		.query_row(&select, params![from_uid], |row| {
+			(0..columns.len())
+				.map(|i| row.get::<_, rusqlite::types::Value>(i))
+				.collect::<rusqlite::Result<Vec<_>>>()
+		})
+		.map_err(|e| e.to_string())?;
+	let assignments: Vec<String> = columns
+		.iter()
+		.enumerate()
+		.map(|(i, c)| format!("{} = ?{}", c, i + 1))
+		.collect();
+	values.push(rusqlite::types::Value::Text(target_uid.to_string()));
+	target
+		.execute(
+			&format!(
+				"UPDATE {} SET {} WHERE uid = ?{}",
+				table,
+				assignments.join(", "),
+				columns.len() + 1
+			),
+			rusqlite::params_from_iter(values.iter()),
+		)
+		.map_err(|e| e.to_string())?;
+	Ok(())
+}
+
+fn merged_text(merged: &Connection, table: &str, column: &str, uid: &str) -> Option<String> {
+	merged
+		.query_row(
+			&format!("SELECT {} FROM {} WHERE uid = ?1", column, table),
+			params![uid],
+			|r| r.get::<_, Option<String>>(0),
+		)
+		.ok()
+		.flatten()
+}
+
+fn finish_delete(result: DeleteResult) -> Result<(), String> {
+	if let Some(f) = result.failed.first() {
+		return Err(f.error.clone());
+	}
+	if let Some(r) = result.read_only.first() {
+		return Err(format!("{} belongs to a read-only library", r.uid));
+	}
+	Ok(())
+}
+
+fn merge_artists_blocking(
+	profile_uid: &str,
+	keep_uid: &str,
+	drop_uids: &[String],
+	update: &ArtistUpdate,
+	image_from_uid: Option<&str>,
+) -> Result<(), String> {
+	if drop_uids.is_empty() || drop_uids.iter().any(|u| u == keep_uid) {
+		return Err("Select a primary artist and at least one other artist to merge".to_string());
+	}
+
+	let merged = open_merged_conn(profile_uid);
+	let keep_old_name = merged_text(&merged, "artists", "name", keep_uid)
+		.ok_or_else(|| "Primary artist not found".to_string())?;
+	let drop_names: Vec<String> = drop_uids
+		.iter()
+		.filter_map(|u| merged_text(&merged, "artists", "name", u))
+		.collect();
+	drop(merged);
+
+	let new_name = update
+		.name
+		.clone()
+		.filter(|n| !n.trim().is_empty())
+		.unwrap_or_else(|| keep_old_name.clone());
+
+	let (keep_conn, keep_lib) =
+		library_manager::open_source_conn_for_entity(profile_uid, keep_uid, "artists")
+			.map_err(|e| e.to_string())?;
+	ensure_writable(&keep_lib, "The primary artist")?;
+	for uid in drop_uids {
+		let (_, lib) = library_manager::open_source_conn_for_entity(profile_uid, uid, "artists")
+			.map_err(|e| e.to_string())?;
+		ensure_writable(&lib, "A merged artist")?;
+	}
+
+	update_artist_by_uid(&keep_conn, keep_uid, update).map_err(|e| e.to_string())?;
+
+	if let Some(from) = image_from_uid.filter(|u| *u != keep_uid) {
+		copy_image_columns(
+			profile_uid,
+			"artists",
+			&[
+				"profile_art_blob",
+				"profile_art_path",
+				"profile_art_thumb",
+				"banner_art_blob",
+				"banner_art_path",
+			],
+			from,
+			&keep_conn,
+			keep_uid,
+		)?;
+	}
+	library_manager::sync_artist(profile_uid, &keep_lib.uid, keep_uid)?;
+
+	let mut old_names: Vec<String> = drop_names.clone();
+	old_names.push(keep_old_name.clone());
+	for name in old_names {
+		if name.trim().to_lowercase() != new_name.trim().to_lowercase() {
+			library_manager::rename_artist_everywhere(profile_uid, &name, &new_name)?;
+		}
+	}
+
+	let settings = open_settings_conn(profile_uid);
+	for uid in drop_uids {
+		crate::db::settings_manager::add_uid_remap(&settings, uid, keep_uid, "artist")
+			.map_err(|e| e.to_string())?;
+	}
+
+	finish_delete(delete_entities(profile_uid, Kind::Artists, drop_uids, false)?)
+}
+
+fn merge_albums_blocking(
+	profile_uid: &str,
+	keep_uid: &str,
+	drop_uids: &[String],
+	update: &AlbumUpdate,
+	image_from_uid: Option<&str>,
+) -> Result<(), String> {
+	if drop_uids.is_empty() || drop_uids.iter().any(|u| u == keep_uid) {
+		return Err("Select a primary album and at least one other album to merge".to_string());
+	}
+
+	let merged = open_merged_conn(profile_uid);
+	let keep_old_title = merged_text(&merged, "albums", "title", keep_uid)
+		.ok_or_else(|| "Primary album not found".to_string())?;
+	let keep_old_artist = merged_text(&merged, "albums", "album_artist", keep_uid).unwrap_or_default();
+
+	let mut union: Vec<serde_json::Value> = Vec::new();
+	let mut seen: HashSet<String> = HashSet::new();
+	let mut all_uids: Vec<&str> = vec![keep_uid];
+	all_uids.extend(drop_uids.iter().map(|s| s.as_str()));
+	for uid in all_uids {
+		if let Some(json) = merged_text(&merged, "albums", "tracks", uid) {
+			if let Ok(list) = serde_json::from_str::<Vec<serde_json::Value>>(&json) {
+				for entry in list {
+					let tuid = entry_uid(&entry).to_string();
+					if tuid.is_empty() || seen.insert(tuid) {
+						union.push(entry);
+					}
+				}
+			}
+		}
+	}
+	drop(merged);
+
+	let new_title = update
+		.title
+		.clone()
+		.filter(|t| !t.trim().is_empty())
+		.unwrap_or_else(|| keep_old_title.clone());
+
+	let (keep_conn, keep_lib) =
+		library_manager::open_source_conn_for_entity(profile_uid, keep_uid, "albums")
+			.map_err(|e| e.to_string())?;
+	ensure_writable(&keep_lib, "The primary album")?;
+	for uid in drop_uids {
+		let (_, lib) = library_manager::open_source_conn_for_entity(profile_uid, uid, "albums")
+			.map_err(|e| e.to_string())?;
+		ensure_writable(&lib, "A merged album")?;
+	}
+
+	for uid in drop_uids {
+		library_manager::repoint_album_in_tracks(profile_uid, uid, keep_uid, &new_title)?;
+	}
+
+	let mut final_update = AlbumUpdate {
+		format: update.format.clone(),
+		title: update.title.clone(),
+		rating: update.rating,
+		artists: update.artists.clone(),
+		album_artist: update.album_artist.clone(),
+		release_date: update.release_date.clone(),
+		tags: update.tags.clone(),
+		genres: update.genres.clone(),
+		tracks: None,
+		credits: update.credits.clone(),
+		label: update.label.clone(),
+		artwork_blob: None,
+		artwork_path: update.artwork_path.clone(),
+		emulate_type: update.emulate_type.clone(),
+	};
+	final_update.tracks = Some(serde_json::to_string(&union).map_err(|e| e.to_string())?);
+
+	update_album_by_uid(&keep_conn, keep_uid, &final_update).map_err(|e| e.to_string())?;
+
+	if let Some(from) = image_from_uid.filter(|u| *u != keep_uid) {
+		copy_image_columns(
+			profile_uid,
+			"albums",
+			&["artwork_blob", "artwork_path", "artwork_thumb"],
+			from,
+			&keep_conn,
+			keep_uid,
+		)?;
+	}
+	library_manager::sync_album(profile_uid, &keep_lib.uid, keep_uid)?;
+
+	if new_title.trim().to_lowercase() != keep_old_title.trim().to_lowercase() {
+		let artist = update.album_artist.clone().unwrap_or(keep_old_artist);
+		library_manager::rename_album_everywhere(
+			profile_uid,
+			&keep_old_title,
+			&new_title,
+			&artist,
+			Some(keep_uid),
+		)?;
+	}
+
+	let settings = open_settings_conn(profile_uid);
+	for uid in drop_uids {
+		crate::db::settings_manager::add_uid_remap(&settings, uid, keep_uid, "album")
+			.map_err(|e| e.to_string())?;
+	}
+
+	finish_delete(delete_entities(profile_uid, Kind::Albums, drop_uids, false)?)
+}
+
+#[tauri::command]
+pub async fn merge_artists_cmd(
+	state: State<'_, AppState>,
+	keep_uid: String,
+	drop_uids: Vec<String>,
+	update: ArtistUpdate,
+	image_from_uid: Option<String>,
+) -> Result<(), String> {
+	let profile_uid = state.get_uid();
+	library_manager::run_blocking(move || {
+		merge_artists_blocking(
+			&profile_uid,
+			&keep_uid,
+			&drop_uids,
+			&update,
+			image_from_uid.as_deref(),
+		)
+	})
+	.await
+}
+
+#[tauri::command]
+pub async fn merge_albums_cmd(
+	state: State<'_, AppState>,
+	keep_uid: String,
+	drop_uids: Vec<String>,
+	update: AlbumUpdate,
+	image_from_uid: Option<String>,
+) -> Result<(), String> {
+	let profile_uid = state.get_uid();
+	library_manager::run_blocking(move || {
+		merge_albums_blocking(
+			&profile_uid,
+			&keep_uid,
+			&drop_uids,
+			&update,
+			image_from_uid.as_deref(),
+		)
+	})
+	.await
 }
