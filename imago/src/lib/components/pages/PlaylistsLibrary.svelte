@@ -1,6 +1,6 @@
 <script lang="ts">
 	// COMPONENTS
-	import { FolderPlus, ListPlus, FileDown, LayoutGrid, List, ChevronRight, ChevronDown, Folder, FolderOpen, House } from "lucide-svelte";
+	import { FolderPlus, ListPlus, FileDown, LayoutGrid, ListTree, ChevronRight, ChevronDown, Folder, FolderOpen, House } from "lucide-svelte";
 	import * as ContextMenu from "$shadcn/context-menu/index.js";
 	import ScrollArea from "$lib/components/custom/ScrollView.svelte";
 	import { Button } from "$shadcn/button/index.js";
@@ -340,7 +340,7 @@
 			<div class="flex-1"></div>
 			<PlaylistSortBar bind:sortField bind:sortDir />
 			<Button variant="ghost" size="icon" onclick={() => compact = !compact}>
-				{#if compact}<LayoutGrid />{:else}<List />{/if}
+				{#if compact}<LayoutGrid />{:else}<ListTree />{/if}
 			</Button>
 		</div>
 
