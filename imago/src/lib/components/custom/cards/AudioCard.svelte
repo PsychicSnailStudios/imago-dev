@@ -13,7 +13,7 @@
 	import type { AudioCatagories } from "$ts/util/types";
 
 	// PROPS
-	let { title, subTitle, entity, type } = $props<{ title: string; subTitle: string | null; entity: any; type: AudioCatagories }>();
+	let { title, subTitle, entity, type, virtualize = true } = $props<{ title: string; subTitle: string | null; entity: any; type: AudioCatagories; virtualize?: boolean }>();
 
 	// FUNCTIONS
 	async function play(e: MouseEvent) {
@@ -31,7 +31,7 @@
 {#if entity}
 <button
 	class="w-full text-left flex flex-col gap-2 p-2 rounded-md bg-background border hover:border-primary transition-colors cursor-default justify-start group"
-	style="content-visibility: auto; contain-intrinsic-height: auto 260px;"
+	style={virtualize ? "content-visibility: auto; contain-intrinsic-height: auto 260px;" : undefined}
 	onclick={() => setSelection(entity.uid)}
 >
 	<div class="relative w-full">
