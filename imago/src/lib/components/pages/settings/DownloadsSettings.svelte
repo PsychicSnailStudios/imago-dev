@@ -2,6 +2,8 @@
 	import { open } from "@tauri-apps/plugin-dialog";
 	import { Button } from "$shadcn/button/index.js";
 	import { Switch } from "$shadcn/switch/index.js";
+	import { Input } from "$shadcn/input/index.js";
+	import { Label } from "$shadcn/label/index.js";
 
 	interface Props {
 		settings: Record<string, string>;
@@ -23,6 +25,22 @@
 		{ value: "{artist} - {title}", label: "Artist - Title" },
 		{ value: "{track_number} - {artist} - {title}", label: "01 - Artist - Title" },
 	];
+
+	const SAMPLE: Record<string, string> = {
+		artist: "Bicep",
+		album: "Isles",
+		year: "2021",
+		track_number: "03",
+		title: "Atlas",
+	};
+
+	function applySample(template: string): string {
+		return template.replace(/\{(\w+)\}/g, (match, key) => SAMPLE[key] ?? match);
+	}
+
+	const folderStyle = $derived(settings["download_path_style"] ?? "{artist}/{album}");
+	const filenameStyle = $derived(settings["download_filename_style"] ?? "{track_number} - {title}");
+	const previewPath = $derived(`${applySample(folderStyle)}/${applySample(filenameStyle)}.mp3`);
 
 	async function browseDownloadPath() {
 		const selected = await open({ directory: true, multiple: false });
@@ -48,32 +66,45 @@
 			</div>
 		</div>
 
-		<div class="space-y-1">
-			<label class="text-sm font-medium">Folder Structure</label>
-			<p class="text-xs text-muted-foreground">How subfolders are created inside the download location.</p>
-			<select
-				class="w-full border rounded px-3 py-2 text-sm bg-background"
+		<div class="space-y-2">
+			<Label class="text-sm font-medium">Folder Structure</Label>
+			<p class="text-xs text-muted-foreground">
+				Subfolders inside the download location. Tokens: {"{artist}"} {"{album}"} {"{year}"}. Use / to nest folders.
+			</p>
+			<Input
+				placeholder={"{artist}/{album}"}
 				value={settings["download_path_style"] ?? "{artist}/{album}"}
-				onchange={(e) => saveSetting("download_path_style", (e.target as HTMLSelectElement).value)}
-			>
+				onchange={(e) => saveSetting("download_path_style", (e.target as HTMLInputElement).value)}
+			/>
+			<div class="flex flex-wrap gap-1">
 				{#each PATH_STYLE_OPTIONS as opt}
-					<option value={opt.value}>{opt.label}</option>
+					<Button variant="outline" size="sm" onclick={() => saveSetting("download_path_style", opt.value)}>
+						{opt.label}
+					</Button>
 				{/each}
-			</select>
+			</div>
 		</div>
 
-		<div class="space-y-1">
-			<label class="text-sm font-medium">Filename Style</label>
-			<p class="text-xs text-muted-foreground">How downloaded files are named.</p>
-			<select
-				class="w-full border rounded px-3 py-2 text-sm bg-background"
+		<div class="space-y-2">
+			<Label class="text-sm font-medium">Filename Style</Label>
+			<p class="text-xs text-muted-foreground">
+				How downloaded files are named. Tokens: {"{title}"} {"{artist}"} {"{album}"} {"{year}"} {"{track_number}"}. The file extension is added automatically.
+			</p>
+			<Input
+				placeholder={"{track_number} - {title}"}
 				value={settings["download_filename_style"] ?? "{track_number} - {title}"}
-				onchange={(e) => saveSetting("download_filename_style", (e.target as HTMLSelectElement).value)}
-			>
+				onchange={(e) => saveSetting("download_filename_style", (e.target as HTMLInputElement).value)}
+			/>
+			<div class="flex flex-wrap gap-1">
 				{#each FILENAME_STYLE_OPTIONS as opt}
-					<option value={opt.value}>{opt.label}</option>
+					<Button variant="outline" size="sm" onclick={() => saveSetting("download_filename_style", opt.value)}>
+						{opt.label}
+					</Button>
 				{/each}
-			</select>
+			</div>
+			<p class="text-xs text-muted-foreground">
+				Preview: <span class="text-foreground">{previewPath}</span>
+			</p>
 		</div>
 
 		<div class="flex items-center justify-between gap-4">
