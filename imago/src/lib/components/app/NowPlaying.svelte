@@ -84,7 +84,7 @@
 			<div class="flex flex-col">
 				<Button variant="ghost" size="icon" onclick={() => showQueue = !showQueue}>
 					{#if showQueue}
-						<QueueIcon class="size-4" />
+						<QueueIcon class="size-4 text-accent" />
 					{:else}
 						<QueueIcon class="size-4" />
 					{/if}

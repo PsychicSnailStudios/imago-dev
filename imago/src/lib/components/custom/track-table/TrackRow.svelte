@@ -143,24 +143,33 @@
 	{/if}
 
 	{#if showNumber && !showArtwork}
-		<div class="group relative w-full h-full flex items-center justify-start">
-			<span class="text-sm pointer-events-none group-hover:opacity-0">{getTrackNumber()}</span>
-			<div class="cursor-pointer absolute top-0 -left-3 inset-0 w-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-				{#if player.isPlaying && player.track?.uid === track.uid}
+		{#if player.isPlaying && player.track?.uid === track.uid}
+			<div class="group relative w-full h-full flex items-center justify-start">
+				<div class="cursor-pointer absolute top-0 -left-3 inset-0 w-full flex items-center justify-center">
 					<Button variant="ghost" size="icon" onclick={() => togglePlay()}>
 						<Pause />
 					</Button>
-				{:else if player.track?.uid === track.uid}
+				</div>
+			</div>
+		{:else if player.track?.uid === track.uid}
+			<div class="group relative w-full h-full flex items-center justify-start">
+				<span class="text-sm pointer-events-none group-hover:opacity-0">{getTrackNumber()}</span>
+				<div class="cursor-pointer absolute top-0 -left-3 inset-0 w-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
 					<Button variant="ghost" size="icon" onclick={() => togglePlay()}>
 						<Play />
 					</Button>
-				{:else}
+				</div>
+			</div>
+		{:else}
+			<div class="group relative w-full h-full flex items-center justify-start">
+				<span class="text-sm pointer-events-none group-hover:opacity-0">{getTrackNumber()}</span>
+				<div class="cursor-pointer absolute top-0 -left-3 inset-0 w-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
 					<Button variant="ghost" size="icon" onclick={() => playTrackByUid(track.uid, sourceUid)}>
 						<Play />
 					</Button>
-				{/if}
+				</div>
 			</div>
-		</div>
+		{/if}
 	{/if}
 
 	{#if !compact && showArtwork}
@@ -186,7 +195,7 @@
 
 	{#if showTitle}
 		{#if compact}
-			<div class="min-w-0 flex items-center">
+			<div class="min-w-0 flex items-center { player.isPlaying && player.track?.uid === track.uid ? 'text-accent' : 'text-primary' }">
 				<span role="button" tabindex="0" onclick={() => setSelection(track.uid)} onkeydown={(e) => { if (e.key === 'Enter') setSelection(track.uid); }} class="text-sm truncate cursor-pointer hover:underline">
 					{track.title ?? "Unknown Title"}
 				</span>
@@ -194,7 +203,10 @@
 		{:else}
 			<div class="flex flex-col min-w-0">
 				<div class="min-w-0 flex items-center">
-					<span role="button" tabindex="0" onclick={() => setSelection(track.uid)} onkeydown={(e) => { if (e.key === 'Enter') setSelection(track.uid); }} class="text-sm truncate cursor-pointer hover:underline">
+					<span
+					role="button"
+					tabindex="0"
+					onclick={() => setSelection(track.uid)} onkeydown={(e) => { if (e.key === 'Enter') setSelection(track.uid); }} class="text-sm truncate cursor-pointer hover:underline { player.isPlaying && player.track?.uid === track.uid ? 'text-accent' : 'text-primary' }">
 						{track.title ?? "Unknown Title"}
 					</span>
 				</div>
