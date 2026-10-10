@@ -31,6 +31,8 @@
 	import { selection, scanState, activeView, loadSessionState, saveSessionState } from "$ts/store/session.svelte";
 	import { dragState } from "$ts/store/drag.svelte";
 	import { togglePlay, skipBack, skipNext, loadPlayerState, savePlayerState } from "$ts/audio/audioManager.svelte";
+	import { scrobbleSignal } from "$ts/audio/scrobbler.svelte";
+	import { resetScrobbleCache } from "$ts/audio/scrobbleCache";
 	import { checkForUpdate } from "$lib/updater.svelte";
 	import { loadProfiles, profileState } from "$ts/store/profiles.svelte";
 
@@ -113,6 +115,11 @@
 			scanState.enriching = false;
 			scanState.enrichErrors = event.payload.errors;
 			scanState.status = `Enrichment done. ${event.payload.total - event.payload.errors} updated, ${event.payload.errors} not found.`;
+		});
+
+		await listen("scrobbles:relinked", () => {
+			resetScrobbleCache();
+			scrobbleSignal.version++;
 		});
 
 		await listen("library:updated", () => {

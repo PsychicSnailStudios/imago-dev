@@ -4,7 +4,7 @@
 
 	import ArtworkDisplay from "$lib/components/custom/ArtworkDisplay.svelte";
 
-	import { getAlbum, getTrack, library } from "$ts/store/library.svelte";
+	import { getAlbum, getTrack } from "$ts/store/library.svelte";
 	import { setSelection } from "$ts/store/session.svelte";
 	import type { Track, Album } from "$ts/util/types";
     import { parseArtistsToString } from "$ts/util/parsers";
@@ -57,10 +57,9 @@
 					return [{ track, plays }];
 				});
 
-			const trackByUid = new Map(library.tracks.map((t) => [t.uid, t]));
 			const albumMap = new Map<string, number>();
 			for (const s of relevant) {
-				const track = trackByUid.get(s.track_uid);
+				const track = getTrack(s.track_uid);
 				if (!track) continue;
 				let albumUid = "";
 				try {

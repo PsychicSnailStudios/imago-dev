@@ -55,6 +55,20 @@ fn get_lib_uid_for_path(settings_conn: &Connection, path: &str) -> Option<String
 }
 
 fn spawn_post_scan_tasks(app: AppHandle, profile_uid: String) {
+	{
+		let relink_app = app.clone();
+		let relink_uid = profile_uid.clone();
+		std::thread::spawn(move || {
+			match crate::commands::scrobbles::relink_unmatched_scrobbles(&relink_uid) {
+				Ok(n) if n > 0 => {
+					relink_app.emit("scrobbles:relinked", n).ok();
+				}
+				Ok(_) => {}
+				Err(e) => eprintln!("[scrobbles] relink failed: {e}"),
+			}
+		});
+	}
+
 	let settings_conn = open_settings_conn(&profile_uid);
 	let flag = |key: &str| -> bool {
 		crate::db::get_setting(&settings_conn, key)

@@ -414,6 +414,7 @@ pub fn run() {
 			commands::scrobbles::get_scrobbles,
 			commands::scrobbles::get_scrobbles_for_track,
 			commands::scrobbles::get_scrobbles_since,
+			commands::scrobbles::relink_scrobbles_cmd,
 			commands::scrobbles::get_recent_scrobbles,
 			commands::scrobbles::get_scrobbles_for_artist,
 			commands::scrobbles::log_scrobble,
