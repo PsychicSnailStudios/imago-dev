@@ -381,7 +381,7 @@ fn get_group_member_uids(conn: &Connection, group_uid: &str) -> Result<Vec<Strin
 // ─── Propagation helpers ──────────────────────────────────────────────────────
 
 /// Walk every row in `table`.`field` (a JSON string array) and rename a value.
-fn propagate_rename(
+pub fn propagate_rename(
     conn: &Connection,
     table: &str,
     field: &str,
@@ -406,7 +406,7 @@ fn propagate_rename(
 }
 
 /// Walk every row and remove a value from the JSON array.
-fn propagate_remove(conn: &Connection, table: &str, field: &str, name: &str) -> Result<()> {
+pub fn propagate_remove(conn: &Connection, table: &str, field: &str, name: &str) -> Result<()> {
     let sql =
         format!("SELECT rowid, {field} FROM {table} WHERE {field} IS NOT NULL AND {field} != '[]'");
     let mut stmt = conn.prepare(&sql)?;

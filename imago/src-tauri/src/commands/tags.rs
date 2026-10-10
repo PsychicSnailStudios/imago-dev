@@ -1,4 +1,5 @@
 use crate::db::tag_manager::{self, Tag, TagGroup, TagKind};
+use crate::library_manager;
 use crate::open_local_library_conn;
 use crate::state::AppState;
 use tauri::State;
@@ -6,8 +7,14 @@ use tauri::State;
 #[tauri::command]
 pub async fn get_all_tags_cmd(state: State<'_, AppState>) -> Result<Vec<Tag>, String> {
     let uid = state.get_uid();
-    let conn = open_local_library_conn(&uid);
-    tag_manager::get_all_tags(&conn).map_err(|e| e.to_string())
+    library_manager::run_blocking(move || {
+        if let Err(e) = library_manager::sync_tag_dictionary(&uid) {
+            eprintln!("[tags] dictionary sync failed: {e}");
+        }
+        let conn = open_local_library_conn(&uid);
+        tag_manager::get_all_tags(&conn).map_err(|e| e.to_string())
+    })
+    .await
 }
 
 #[tauri::command]
@@ -39,15 +46,41 @@ pub async fn rename_tag_cmd(
     new_name: String,
 ) -> Result<(), String> {
     let profile_uid = state.get_uid();
-    let conn = open_local_library_conn(&profile_uid);
-    tag_manager::rename_tag(&conn, &uid, &new_name).map_err(|e| e.to_string())
+    library_manager::run_blocking(move || {
+        let conn = open_local_library_conn(&profile_uid);
+        let tag = tag_manager::get_tag_by_uid(&conn, &uid).map_err(|e| e.to_string())?;
+        tag_manager::rename_tag(&conn, &uid, &new_name).map_err(|e| e.to_string())?;
+        if let Some(tag) = tag {
+            library_manager::propagate_tag_change(
+                &profile_uid,
+                tag.kind == TagKind::Genre,
+                &tag.name,
+                Some(&new_name),
+            )?;
+        }
+        Ok(())
+    })
+    .await
 }
 
 #[tauri::command]
 pub async fn delete_tag_cmd(state: State<'_, AppState>, uid: String) -> Result<(), String> {
     let profile_uid = state.get_uid();
-    let conn = open_local_library_conn(&profile_uid);
-    tag_manager::delete_tag(&conn, &uid).map_err(|e| e.to_string())
+    library_manager::run_blocking(move || {
+        let conn = open_local_library_conn(&profile_uid);
+        let tag = tag_manager::get_tag_by_uid(&conn, &uid).map_err(|e| e.to_string())?;
+        tag_manager::delete_tag(&conn, &uid).map_err(|e| e.to_string())?;
+        if let Some(tag) = tag {
+            library_manager::propagate_tag_change(
+                &profile_uid,
+                tag.kind == TagKind::Genre,
+                &tag.name,
+                None,
+            )?;
+        }
+        Ok(())
+    })
+    .await
 }
 
 #[tauri::command]

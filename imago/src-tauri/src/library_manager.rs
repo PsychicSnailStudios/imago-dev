@@ -798,6 +798,221 @@ fn refresh_local_override_flags(merged: &Connection, default_lib_uid: &str) -> R
 	Ok(())
 }
 
+// ─── Tag dictionary ───────────────────────────────────────────────────────────
+
+static TAG_SYNC_STAMPS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, i64>>> =
+	std::sync::OnceLock::new();
+
+fn file_stamp(path: &str) -> i64 {
+	std::fs::metadata(path)
+		.ok()
+		.and_then(|m| m.modified().ok())
+		.and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+		.map(|d| d.as_millis() as i64)
+		.unwrap_or(0)
+}
+
+fn migrate_legacy_tags(
+	profile_uid: &str,
+	local: &Connection,
+	settings: &Connection,
+) -> Result<(), String> {
+	let already: Option<String> = settings
+		.query_row(
+			"SELECT value FROM settings WHERE key = 'tags_migrated_from_libdb'",
+			[],
+			|r| r.get(0),
+		)
+		.ok();
+	if already.is_some() {
+		return Ok(());
+	}
+
+	let legacy_path = crate::profiles::get_lib_db_path(profile_uid);
+	if legacy_path.exists() {
+		if let Ok(legacy) = Connection::open_with_flags(
+			&legacy_path,
+			rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+		) {
+			let has_tags: bool = legacy
+				.query_row(
+					"SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tags'",
+					[],
+					|_| Ok(true),
+				)
+				.unwrap_or(false);
+
+			if has_tags {
+				let tx = local.unchecked_transaction().map_err(|e| e.to_string())?;
+
+				let tag_rows: Vec<Vec<rusqlite::types::Value>> = {
+					let mut stmt = legacy
+						.prepare("SELECT uid, name, kind, color, created_at FROM tags")
+						.map_err(|e| e.to_string())?;
+					let collected: Vec<Vec<rusqlite::types::Value>> = stmt
+						.query_map([], |row| read_row_values(row, 5))
+						.map_err(|e| e.to_string())?
+						.filter_map(|r| r.ok())
+						.collect();
+					collected
+				};
+				for vals in &tag_rows {
+					local
+						.execute(
+							"INSERT OR IGNORE INTO tags (uid, name, kind, color, created_at) VALUES (?1,?2,?3,?4,?5)",
+							rusqlite::params_from_iter(vals.iter()),
+						)
+						.map_err(|e| e.to_string())?;
+				}
+
+				let group_rows: Vec<Vec<rusqlite::types::Value>> = legacy
+					.prepare("SELECT uid, name, kind, color, created_at FROM tag_groups")
+					.ok()
+					.map(|mut stmt| {
+						let collected: Vec<Vec<rusqlite::types::Value>> = stmt
+							.query_map([], |row| read_row_values(row, 5))
+							.map(|rows| rows.filter_map(|r| r.ok()).collect())
+							.unwrap_or_default();
+						collected
+					})
+					.unwrap_or_default();
+				for vals in &group_rows {
+					local
+						.execute(
+							"INSERT OR IGNORE INTO tag_groups (uid, name, kind, color, created_at) VALUES (?1,?2,?3,?4,?5)",
+							rusqlite::params_from_iter(vals.iter()),
+						)
+						.map_err(|e| e.to_string())?;
+				}
+
+				let member_rows: Vec<(String, String)> = legacy
+					.prepare("SELECT group_uid, tag_uid FROM tag_group_members")
+					.ok()
+					.map(|mut stmt| {
+						let collected: Vec<(String, String)> = stmt
+							.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+							.map(|rows| rows.filter_map(|r| r.ok()).collect())
+							.unwrap_or_default();
+						collected
+					})
+					.unwrap_or_default();
+				for (group_uid, tag_uid) in member_rows {
+					local
+						.execute(
+							"INSERT OR IGNORE INTO tag_group_members (group_uid, tag_uid)
+							 SELECT ?1, ?2
+							 WHERE EXISTS (SELECT 1 FROM tag_groups WHERE uid = ?1)
+							   AND EXISTS (SELECT 1 FROM tags WHERE uid = ?2)",
+							params![group_uid, tag_uid],
+						)
+						.map_err(|e| e.to_string())?;
+				}
+
+				tx.commit().map_err(|e| e.to_string())?;
+			}
+		}
+	}
+
+	settings
+		.execute(
+			"INSERT OR REPLACE INTO settings (key, value) VALUES ('tags_migrated_from_libdb', '1')",
+			[],
+		)
+		.map_err(|e| e.to_string())?;
+	Ok(())
+}
+
+pub fn sync_tag_dictionary(profile_uid: &str) -> Result<(), String> {
+	use crate::db::tag_manager::{ensure_tag, TagKind};
+
+	let settings = open_tuned(get_settings_db_path(profile_uid))?;
+	let default_lib = get_default_library(&settings)
+		.map_err(|e| e.to_string())?
+		.ok_or_else(|| "No default library found".to_string())?;
+	let local = open_tuned(&default_lib.file_path)?;
+	crate::db::tag_manager::create_tag_tables(&local).map_err(|e| e.to_string())?;
+
+	migrate_legacy_tags(profile_uid, &local, &settings)?;
+
+	let merged_path = get_merged_db_path(profile_uid);
+	if !merged_path.exists() {
+		return Ok(());
+	}
+	let merged_str = merged_path.to_string_lossy().to_string();
+	let stamp = file_stamp(&merged_str) + file_stamp(&format!("{}-wal", merged_str));
+
+	let stamps = TAG_SYNC_STAMPS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+	if stamps.lock().unwrap().get(profile_uid).copied() == Some(stamp) {
+		return Ok(());
+	}
+
+	let merged = open_tuned(&merged_path)?;
+	let tx = local.unchecked_transaction().map_err(|e| e.to_string())?;
+
+	for table in ["tracks", "albums", "artists"] {
+		for (column, kind) in [("tags", TagKind::Tag), ("genres", TagKind::Genre)] {
+			let names: Vec<String> = {
+				let mut stmt = merged
+					.prepare(&format!(
+						"SELECT DISTINCT j.value
+						 FROM {table} t, json_each(CASE WHEN json_valid(t.{col}) THEN t.{col} ELSE '[]' END) j
+						 WHERE t.{col} IS NOT NULL AND t.{col} != '[]' AND j.type = 'text'",
+						table = table,
+						col = column
+					))
+					.map_err(|e| e.to_string())?;
+				let collected: Vec<String> = stmt
+					.query_map([], |row| row.get::<_, String>(0))
+					.map_err(|e| e.to_string())?
+					.filter_map(|r| r.ok())
+					.collect();
+				collected
+			};
+			for name in names {
+				let trimmed = name.trim();
+				if !trimmed.is_empty() {
+					ensure_tag(&local, trimmed, kind.clone());
+				}
+			}
+		}
+	}
+
+	tx.commit().map_err(|e| e.to_string())?;
+	stamps.lock().unwrap().insert(profile_uid.to_string(), stamp);
+	Ok(())
+}
+
+pub fn propagate_tag_change(
+	profile_uid: &str,
+	is_genre: bool,
+	old_name: &str,
+	new_name: Option<&str>,
+) -> Result<(), String> {
+	let field = if is_genre { "genres" } else { "tags" };
+	let mut touched: Vec<String> = Vec::new();
+
+	for lib in writable_libraries(profile_uid)? {
+		let conn = open_tuned(&lib.file_path)?;
+		{
+			let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+			for table in ["tracks", "albums", "artists"] {
+				let result = match new_name {
+					Some(n) => crate::db::tag_manager::propagate_rename(&conn, table, field, old_name, n),
+					None => crate::db::tag_manager::propagate_remove(&conn, table, field, old_name),
+				};
+				result.map_err(|e| e.to_string())?;
+			}
+			tx.commit().map_err(|e| e.to_string())?;
+		}
+		touched.push(lib.uid.clone());
+	}
+
+	if !touched.is_empty() {
+		incremental_update(profile_uid, &touched)?;
+	}
+	Ok(())
+}
+
 // ─── Batch rename across all writable libraries ───────────────────────────────
 
 pub fn writable_libraries(profile_uid: &str) -> Result<Vec<Library>, String> {
@@ -1273,11 +1488,11 @@ pub fn open_source_conn_for_entity(
 // Returns Ok(true) on success, Ok(false) if no sync_url is configured.
 // On failure the error is logged but does not propagate — the local write
 // already succeeded; the library is simply flagged as having unpushed changes.
-pub async fn try_push_library(lib: &Library) -> bool {
-    let sync_url = match &lib.sync_url {
-        Some(u) => u.clone(),
-        None => return false,
-    };
+pub async fn push_library_checked(lib: &Library) -> Result<(), String> {
+    let sync_url = lib
+        .sync_url
+        .clone()
+        .ok_or_else(|| "This library has no remote location to push to".to_string())?;
 
     fn is_remote_http(url: &str) -> bool {
         url.starts_with("http://") || url.starts_with("https://")
@@ -1285,72 +1500,78 @@ pub async fn try_push_library(lib: &Library) -> bool {
 
     checkpoint_db(&lib.file_path);
 
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+
     if !is_remote_http(&sync_url) {
-        match std::fs::copy(&lib.file_path, &sync_url) {
-            Ok(_) => {
-                let sidecar_path = format!("{}.json", sync_url);
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs() as i64)
-                    .unwrap_or(0);
-                let sidecar = format!(
-                    "{{\n\t\"last_modified\": {},\n\t\"write_requires_token\": false\n}}\n",
-                    now
-                );
-                std::fs::write(&sidecar_path, sidecar).ok();
-                true
-            }
-            Err(e) => {
-                eprintln!("[library_manager] push: failed to copy to share: {}", e);
-                false
-            }
-        }
-    } else {
-        let write_token = match &lib.write_token {
-            Some(t) => t.clone(),
-            None => return false,
-        };
+        std::fs::copy(&lib.file_path, &sync_url)
+            .map_err(|e| format!("Could not copy the library to {}: {}", sync_url, e))?;
+        let sidecar = format!(
+            "{{\n\t\"last_modified\": {},\n\t\"write_requires_token\": false\n}}\n",
+            now
+        );
+        std::fs::write(format!("{}.json", sync_url), sidecar).ok();
+        return Ok(());
+    }
 
-        let file_bytes = match std::fs::read(&lib.file_path) {
-            Ok(b) => b,
-            Err(e) => {
-                eprintln!("[library_manager] push: failed to read file: {}", e);
-                return false;
-            }
-        };
+    let write_token = lib
+        .write_token
+        .clone()
+        .filter(|t| !t.trim().is_empty())
+        .ok_or_else(|| "No write token is set for this library".to_string())?;
 
-        let client = match reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-        {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("[library_manager] push: failed to build client: {}", e);
-                return false;
-            }
-        };
+    let file_bytes = std::fs::read(&lib.file_path)
+        .map_err(|e| format!("Could not read the local library file: {}", e))?;
 
-        match client
-            .put(&sync_url)
-            .header("Authorization", format!("Bearer {}", write_token))
-            .header("Content-Type", "application/octet-stream")
-            .body(file_bytes)
-            .send()
-            .await
-        {
-            Ok(resp) if resp.status().is_success() => true,
-            Ok(resp) => {
-                eprintln!(
-                    "[library_manager] push: server returned {} for {}",
-                    resp.status(),
-                    lib.uid
-                );
-                false
-            }
-            Err(e) => {
-                eprintln!("[library_manager] push: request failed: {}", e);
-                false
-            }
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let resp = client
+        .put(&sync_url)
+        .header("Authorization", format!("Bearer {}", write_token))
+        .header("Content-Type", "application/octet-stream")
+        .body(file_bytes)
+        .send()
+        .await
+        .map_err(|e| format!("Upload request failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("Server rejected the upload ({})", resp.status()));
+    }
+
+    let sidecar = format!(
+        "{{\"last_modified\": {}, \"write_requires_token\": true}}",
+        now
+    );
+    let sidecar_resp = client
+        .put(format!("{}.json", sync_url))
+        .header("Authorization", format!("Bearer {}", write_token))
+        .header("Content-Type", "application/json")
+        .body(sidecar)
+        .send()
+        .await
+        .map_err(|e| format!("Database uploaded, but updating the sync info file failed: {}", e))?;
+
+    if !sidecar_resp.status().is_success() {
+        return Err(format!(
+            "Database uploaded, but the sync info file was rejected ({})",
+            sidecar_resp.status()
+        ));
+    }
+
+    Ok(())
+}
+
+pub async fn try_push_library(lib: &Library) -> bool {
+    match push_library_checked(lib).await {
+        Ok(()) => true,
+        Err(e) => {
+            eprintln!("[library_manager] push failed for {}: {}", lib.uid, e);
+            false
         }
     }
 }
