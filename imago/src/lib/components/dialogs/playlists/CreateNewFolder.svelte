@@ -2,7 +2,7 @@
 	import * as AlertDialog from "$shadcn/alert-dialog/index.js";
 	import { Input } from "$shadcn/input/index.js";
 	
-	import { navigateTo, registerFolder } from "$ts/ui/folderSelection.svelte";
+	import { registerFolder } from "$ts/ui/folderSelection.svelte";
 
 	let { open = $bindable(false), parent = null } = $props<{ open: boolean; parent?: string | null }>();
 
@@ -14,7 +14,6 @@
 		registerFolder(newPath);
 		folderNameInput = "";
 		open = false;
-		navigateTo(newPath);
 	}
 </script>
 
