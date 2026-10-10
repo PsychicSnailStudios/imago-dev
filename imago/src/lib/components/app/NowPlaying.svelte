@@ -4,6 +4,7 @@
 	
 	// COMPONENTS
 	import { Rows4, BadgePlus, Square } from "lucide-svelte";
+	import QueueIcon from "$lib/components/icons/Queue.svelte";
 
 	import * as Tabs from "$shadcn/tabs/index.js";
 	import { Button } from "$shadcn/button";
@@ -83,9 +84,9 @@
 			<div class="flex flex-col">
 				<Button variant="ghost" size="icon" onclick={() => showQueue = !showQueue}>
 					{#if showQueue}
-						<Square />
+						<QueueIcon class="size-4" />
 					{:else}
-						<Rows4 />
+						<QueueIcon class="size-4" />
 					{/if}
 				</Button>
 				<AddToPlaylist track={currentlyPlaying.track!} />
