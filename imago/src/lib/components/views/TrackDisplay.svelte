@@ -163,10 +163,8 @@
 					<Tabs.Trigger value="paths">File Paths</Tabs.Trigger>
 				</Tabs.List>
 
-				<Tabs.Content value="lyrics" class="flex-1 overflow-y-auto mt-2">
-					<ScrollArea class="min-h-0 min-w-0 h-full pl-4">
-						<LyricsViewer uid={track.uid} />
-					</ScrollArea>
+				<Tabs.Content value="lyrics" class="flex flex-col flex-1 min-h-0 mt-2">
+					<LyricsViewer uid={track.uid} />
 				</Tabs.Content>
 
 				<Tabs.Content value="tags" class="flex-1 overflow-y-auto mt-2">
