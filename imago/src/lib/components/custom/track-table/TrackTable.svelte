@@ -439,7 +439,7 @@
 			</ContextMenu.Trigger>
 			{@const ctxTrack = contextMenuTrackUid ? sortedTracks.find(t => t.uid === contextMenuTrackUid) : null}
 			{#if ctxTrack}
-				<TrackContext track={ctxTrack} sourceUid={playlistUid ?? albumUid} />
+				<TrackContext track={ctxTrack} sourceUid={playlistUid ?? albumUid} showGoToAlbum={!v.album} showGoToArtist={!v.artist}/>
 			{/if}
 		</ContextMenu.Root>
 	{:else}
@@ -503,7 +503,7 @@
 			</ContextMenu.Trigger>
 			{@const ctxTrack = contextMenuTrackUid ? sortedTracks.find(t => t.uid === contextMenuTrackUid) : null}
 			{#if ctxTrack}
-				<TrackContext track={ctxTrack} sourceUid={playlistUid ?? albumUid} />
+				<TrackContext track={ctxTrack} sourceUid={playlistUid ?? albumUid} showGoToAlbum={!v.album} showGoToArtist={!v.artist}/>
 			{/if}
 		</ContextMenu.Root>
 	{/if}

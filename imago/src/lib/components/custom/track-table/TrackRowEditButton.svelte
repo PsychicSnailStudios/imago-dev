@@ -6,12 +6,18 @@
 
 	import TrackPlaylistContent from "$lib/components/context-menus/AddTrackToPlaylist.svelte";
 	import { setSelection } from "$ts/store/session.svelte";
-	import { addTrackToQueue, removeFromQueue } from "$ts/audio/audioManager.svelte";
-   import { openEditModal } from "$ts/ui/editModal.svelte";
+	import { addTrackToQueue } from "$ts/audio/audioManager.svelte";
+	import { openEditModal } from "$ts/ui/editModal.svelte";
 	import { copySelectedNameToClipboard } from "$ts/store/trackSelection.svelte";
+	import { goToTrackAlbum, goToTrackArtist } from "$ts/util/trackNavigation";
 	import type { Track } from "$ts/util/types";
 
-	let { track, sourceUid = null } = $props<{ track: Track; sourceUid?: string | null }>()
+	let { track, sourceUid = null, showGoToAlbum = false, showGoToArtist = false } = $props<{
+		track: Track;
+		sourceUid?: string | null;
+		showGoToAlbum?: boolean;
+		showGoToArtist?: boolean;
+	}>();
 
 	let content = $state<ReturnType<typeof TrackPlaylistContent> | null>(null);
 </script>
@@ -44,6 +50,15 @@
 		<DropdownMenu.Separator />
 		<DropdownMenu.Group>
 			<DropdownMenu.Item onSelect={() => setSelection(track.uid)}>Go to Track</DropdownMenu.Item>
+			{#if showGoToAlbum}
+				<DropdownMenu.Item onSelect={() => goToTrackAlbum(track, sourceUid)}>Go to Album</DropdownMenu.Item>
+			{/if}
+			{#if showGoToArtist}
+				<DropdownMenu.Item onSelect={() => goToTrackArtist(track)}>Go to Artist</DropdownMenu.Item>
+			{/if}
+		</DropdownMenu.Group>
+		<DropdownMenu.Separator />
+		<DropdownMenu.Group>
 			<DropdownMenu.Item onSelect={() => openEditModal({ type: "track", uid: track!.uid })}>Edit Metadata</DropdownMenu.Item>
 		</DropdownMenu.Group>
 	</DropdownMenu.Content>

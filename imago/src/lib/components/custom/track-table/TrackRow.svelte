@@ -11,13 +11,12 @@
 	import ArtistsList from "$lib/components/custom/text-display/ArtistsList.svelte";
 
 	// SCRIPTS
-	import { invoke } from "@tauri-apps/api/core";
 	import { setSelection } from "$ts/store/session.svelte";
 	import { trackSelection, selectTrack } from "$ts/store/trackSelection.svelte";
 	import { startDrag, endDrag } from "$ts/store/drag.svelte";
 	import { playTrackByUid, togglePlay } from "$ts/audio/audioManager.svelte";
 	import { formatDuration } from "$ts/util/helpers";
-	import { parseArtistsToString, parseAlbumEntries } from "$ts/util/parsers";
+	import { parseAlbumEntries } from "$ts/util/parsers";
 	import { player } from "$ts/audio/audioPlayer.svelte";
 	import type { Track } from "$ts/util/types";
 
@@ -67,6 +66,9 @@
 	// VARIABLES
 	const isGhosted = $derived(isGhostTrack());
 	let isSelected = $derived(trackSelection.isSelected(track.uid, viewId));
+	const artistShownInRow = $derived(showArtist || (showTitle && !compact));
+	const showGoToAlbum = $derived(!showAlbum);
+	const showGoToArtist = $derived(!artistShownInRow);
 
 	function isGhostTrack(): boolean {
 		if (track.remote_path && track.remote_path.length > 0) return false;
@@ -118,12 +120,6 @@
 		const match = sourceUid ? entries.find((e) => e.uid === sourceUid) : undefined;
 		return match ?? entries[0] ?? null;
 	});
-
-	async function goToAlbumArtist() {
-		if (!track.album_artist) return;
-		const uid = await invoke<string | null>("get_artist_uid_by_name", { name: track.album_artist });
-		if (uid) setSelection(uid);
-	}
 </script>
 
 <div
@@ -225,11 +221,13 @@
 		</span>
 	{/if}
 
-	{#if showAlbum && firstAlbum}
+	{#if showAlbum}
 		<div class="min-w-0 flex items-center pr-4">
-			<span role="button" tabindex="0" onclick={() => { if (firstAlbum?.uid) setSelection(firstAlbum.uid) }} onkeydown={(e) => { if (e.key === 'Enter' && firstAlbum?.uid) setSelection(firstAlbum.uid); }} class="text-sm truncate cursor-pointer hover:underline">
-				{firstAlbum?.name ?? "Unknown Album"}
-			</span>
+			{#if firstAlbum}
+				<span role="button" tabindex="0" onclick={() => { if (firstAlbum?.uid) setSelection(firstAlbum.uid) }} onkeydown={(e) => { if (e.key === 'Enter' && firstAlbum?.uid) setSelection(firstAlbum.uid); }} class="text-sm truncate cursor-pointer hover:underline">
+					{firstAlbum.name ?? "Unknown Album"}
+				</span>
+			{/if}
 		</div>
 	{/if}
 
@@ -250,6 +248,6 @@
 	{/if}
 
 	{#if showOptions}
-			<TrackTableEditButton {track} {sourceUid} />
+		<TrackTableEditButton {track} {sourceUid} {showGoToAlbum} {showGoToArtist} />
 	{/if}
 </div>
