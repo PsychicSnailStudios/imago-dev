@@ -20,7 +20,7 @@ export function isLocalPath(path: string): boolean {
 
 export function pathToSrc(path: string): string {
 	if (path.startsWith("http://") || path.startsWith("https://")) {
-		return path;
+		return convertFileSrc(path, "davstream");
 	}
 	return convertFileSrc(path);
 }

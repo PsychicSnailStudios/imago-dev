@@ -1,8 +1,13 @@
 import { toast } from "svelte-sonner";
+import { listen } from '@tauri-apps/api/event';
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import { setMetadata, setPlaybackInfo, mediaControls, PlaybackStatus, RepeatMode } from 'tauri-plugin-media-api';
+
 import { getTrack, getTrackArray, getTrackArrayFromUID } from "$ts/store/library.svelte";
 import { profileState } from "$ts/store/profiles.svelte";
 import { offlineMode } from "$ts/store/session.svelte";
 import { scrobbleStart, scrobbleEnd, scrobbleMarkPaused, scrobbleMarkSeeked } from "$ts/audio/scrobbler.svelte";
+import { parseAlbumEntries } from "$ts/util/parsers";
 import type { Track } from "$ts/util/types";
 
 import {
@@ -17,50 +22,159 @@ import { isLocalPath, pathToSrc, isGhostTrack, markGhost, triggerOfflineMode, ch
 import { spacedShuffle, smartShuffle } from "$ts/audio/audioShuffles";
 
 let audio: HTMLAudioElement | null = null;
+let playToken = 0;
+let cancelPending: (() => void) | null = null;
 
 function playerKey() { return `imago:player:${profileState.active?.uid ?? "default"}`; }
 function queueKey() { return `imago:queue:${profileState.active?.uid ?? "default"}`; }
 
-// ─── Audio element ────────────────────────────────────────────────────────────
+const mediaReady: Promise<boolean> = mediaControls
+	.initialize('imago-dev', 'Imago')
+	.then(() => true)
+	.catch(() => false);
+
+let mediaChain: Promise<unknown> = mediaReady;
+
+function runMedia(task: () => Promise<void>) {
+	mediaChain = mediaChain
+		.then(async () => {
+			if (await mediaReady) await task();
+		})
+		.catch(() => {});
+}
+
+function artistText(track: Track): string {
+	if (!track.artists) return "Unknown Artist";
+	try {
+		const parsed = JSON.parse(track.artists);
+		if (Array.isArray(parsed)) {
+			const names = parsed
+				.map((a) => (typeof a === "string" ? a : a?.name))
+				.filter((n): n is string => !!n);
+			return names.length > 0 ? names.join(", ") : "Unknown Artist";
+		}
+	} catch {}
+	return track.artists;
+}
+
+function UpdateTitle() {
+	let title = "Imago";
+
+	if (!player.isPlaying) {
+		title = `${currentlyPlaying.track?.title}`;
+	}
+
+	getCurrentWindow().setTitle(title).catch(() => {});
+}
+
+async function pushMediaInfo(status?: PlaybackStatus) {
+	await setPlaybackInfo({
+		status: status ?? (player.isPlaying ? PlaybackStatus.Playing : PlaybackStatus.Paused),
+		position: audio?.currentTime ?? player.currentTime ?? 0,
+		shuffle: player.shuffleType !== 0,
+		repeatMode: player.loopType === 1 ? RepeatMode.Track : player.loopType === 2 ? RepeatMode.List : RepeatMode.None,
+		playbackRate: 1.0,
+	});
+}
+
+function syncMediaInfo(status?: PlaybackStatus) {
+	runMedia(() => pushMediaInfo(status));
+}
+
+function syncMediaMetadata(track: Track) {
+	runMedia(async () => {
+		const seconds = track.duration_ms ? track.duration_ms / 1000 : 0;
+		await setMetadata({
+			title: track.title ?? "Unknown Title",
+			artist: artistText(track),
+			album: parseAlbumEntries(track.albums)[0]?.name ?? undefined,
+			albumArtist: track.album_artist ?? undefined,
+			duration: seconds > 0 ? seconds : undefined,
+		});
+		await pushMediaInfo(PlaybackStatus.Paused);
+	});
+}
+
+let unlistenCallbacks: (() => void)[] = [];
+
+export async function setupMediaListeners() {
+  const unlistenPlay = await listen('plugin:media:play', () => {
+    togglePlay();
+  });
+  
+  const unlistenPause = await listen('plugin:media:pause', () => {
+    togglePlay();
+  });
+
+  const unlistenNext = await listen('plugin:media:next', () => {
+    skipNext();
+  });
+
+  const unlistenPrev = await listen('plugin:media:previous', () => {
+    skipBack();
+  });
+
+  unlistenCallbacks.push(unlistenPlay, unlistenPause, unlistenNext, unlistenPrev);
+}
+
+function releaseAudio() {
+	cancelPending?.();
+	cancelPending = null;
+	if (!audio) return;
+	const old = audio;
+	audio = null;
+	old.pause();
+	old.removeAttribute("src");
+	old.load();
+}
 
 function bindEvents(el: HTMLAudioElement) {
 	el.addEventListener("timeupdate", () => {
+		if (audio !== el) return;
 		player.currentTime = el.currentTime;
 	});
 	el.addEventListener("durationchange", () => {
+		if (audio !== el) return;
 		player.duration = el.duration;
 	});
 	el.addEventListener("ended", () => {
+		if (audio !== el) return;
 		onTrackEnd();
 	});
 	el.addEventListener("play", () => {
+		if (audio !== el) return;
 		player.isPlaying = true;
 		if (audioCtx && audioCtx.state === "suspended") {
 			audioCtx.resume();
 		}
+		syncMediaInfo(PlaybackStatus.Playing);
 	});
 	el.addEventListener("pause", () => {
+		if (audio !== el) return;
 		player.isPlaying = false;
+		if (!el.ended) syncMediaInfo(PlaybackStatus.Paused);
+	});
+	el.addEventListener("seeked", () => {
+		if (audio !== el) return;
+		syncMediaInfo();
 	});
 }
 
 function startAudio(track: Track, play: boolean = true, srcOverride?: string) {
-	if (audio) {
-		audio.pause();
-		audio = null;
-	}
+	releaseAudio();
 
 	player.track = track;
 	currentlyPlaying.uid = track.uid;
 	currentlyPlaying.track = track;
+	syncMediaMetadata(track);
 
 	const el = new Audio();
 	el.crossOrigin = "anonymous";
 	el.src = srcOverride ?? pathToSrc(track.path);
 	el.volume = player.volume;
 	el.muted = player.muted;
-	bindEvents(el);
 	audio = el;
+	bindEvents(el);
 
 	buildAudioGraph(el);
 
@@ -69,49 +183,51 @@ function startAudio(track: Track, play: boolean = true, srcOverride?: string) {
 	if (audioCtx && audioCtx.state === "suspended") {
 		audioCtx.resume();
 	}
-	el.play();
+	el.play().catch(() => {});
 }
 
-// ─── Core playback logic ──────────────────────────────────────────────────────
-
 async function tryPlayWithSrc(track: Track, src: string): Promise<boolean> {
+	releaseAudio();
+
+	player.track = track;
+	currentlyPlaying.uid = track.uid;
+	currentlyPlaying.track = track;
+	syncMediaMetadata(track);
+
 	return new Promise((resolve) => {
-		if (audio) {
-			audio.pause();
-			audio = null;
-		}
-
-		player.track = track;
-		currentlyPlaying.uid = track.uid;
-		currentlyPlaying.track = track;
-
 		const el = new Audio();
 		el.crossOrigin = "anonymous";
 		el.src = src;
 		el.volume = player.volume;
 		el.muted = player.muted;
-		bindEvents(el);
 		audio = el;
+		bindEvents(el);
 		buildAudioGraph(el);
 
 		if (audioCtx && audioCtx.state === "suspended") {
 			audioCtx.resume();
 		}
 
+		const cleanup = () => {
+			el.removeEventListener("canplay", onCanPlay);
+			el.removeEventListener("error", onError);
+		};
+
 		const onCanPlay = () => {
 			cleanup();
-			el.play().catch(() => resolve(false));
-			resolve(true);
+			cancelPending = null;
+			el.play().then(() => resolve(true)).catch(() => resolve(false));
 		};
 
 		const onError = () => {
 			cleanup();
+			cancelPending = null;
 			resolve(false);
 		};
 
-		const cleanup = () => {
-			el.removeEventListener("canplay", onCanPlay);
-			el.removeEventListener("error", onError);
+		cancelPending = () => {
+			cleanup();
+			resolve(false);
 		};
 
 		el.addEventListener("canplay", onCanPlay);
@@ -122,9 +238,13 @@ async function tryPlayWithSrc(track: Track, src: string): Promise<boolean> {
 }
 
 async function playTrack(track: Track) {
+	const token = ++playToken;
+
 	if (currentlyPlaying.track) {
 		playedTracks.unshift(currentlyPlaying.track);
 	}
+
+	UpdateTitle();
 
 	if (isGhostTrack(track)) {
 		toast.warning("Cannot play track — no file available.");
@@ -143,12 +263,14 @@ async function playTrack(track: Track) {
 
 	if (preferLocal) {
 		const ok = await tryPlayWithSrc(track, pathToSrc(track.path));
+		if (token !== playToken) return;
 		if (ok) {
 			scrobbleStart(track, "trackdone", true);
 			return;
 		}
 
 		await markGhost(track, true);
+		if (token !== playToken) return;
 
 		if (!hasRemote) {
 			toast.warning("Cannot play track — local file missing.");
@@ -160,6 +282,7 @@ async function playTrack(track: Track) {
 	if (hasRemote) {
 		if (offlineMode.offline) {
 			const ok = await tryPlayWithSrc(track, pathToSrc(track.remote_path!));
+			if (token !== playToken) return;
 			if (ok) {
 				offlineMode.offline = false;
 				scrobbleStart(track, "trackdone", false);
@@ -171,16 +294,19 @@ async function playTrack(track: Track) {
 		}
 
 		const ok = await tryPlayWithSrc(track, pathToSrc(track.remote_path!));
+		if (token !== playToken) return;
 		if (ok) {
 			scrobbleStart(track, "trackdone", false);
 			return;
 		}
 
 		const online = await checkOnline();
+		if (token !== playToken) return;
 		if (!online) {
 			triggerOfflineMode();
 			if (hasLocal) {
 				const localOk = await tryPlayWithSrc(track, pathToSrc(track.path));
+				if (token !== playToken) return;
 				if (localOk) {
 					scrobbleStart(track, "trackdone", true);
 					return;
@@ -188,6 +314,7 @@ async function playTrack(track: Track) {
 			}
 		} else {
 			await markGhost(track, true);
+			if (token !== playToken) return;
 			toast.warning("Cannot play track — stream unavailable.");
 		}
 
@@ -200,13 +327,13 @@ async function playTrack(track: Track) {
 }
 
 function onTrackEnd(skipGhost = false) {
-	if (!skipGhost) scrobbleEnd(audio!.currentTime, "trackdone", false);
+	if (!skipGhost && audio) scrobbleEnd(audio.currentTime, "trackdone", false);
 
-	if (player.loopType === 1) {
+	if (player.loopType === 1 && !skipGhost) {
 		if (audio) {
 			scrobbleStart(player.track!, "trackdone", !!(player.track && isLocalPath(player.track.path)));
 			audio.currentTime = 0;
-			audio.play();
+			audio.play().catch(() => {});
 		}
 		return;
 	}
@@ -236,6 +363,7 @@ function onTrackEnd(skipGhost = false) {
 
 	player.isPlaying = false;
 	player.currentTime = 0;
+	syncMediaInfo(PlaybackStatus.Stopped);
 }
 
 function applyShuffleToList(tracks: Track[]): Track[] {
@@ -246,41 +374,42 @@ function applyShuffleToList(tracks: Track[]): Track[] {
 	}
 }
 
-// ─── State persistence ────────────────────────────────────────────────────────
-
 export function loadPlayerState() {
 	try {
 		const raw = localStorage.getItem(playerKey());
-		if (!raw) return;
-		const saved = JSON.parse(raw);
-		player.volume = saved.volume ?? 1;
-		player.muted = saved.muted ?? false;
-		player.loopType = saved.loopType ?? 0;
-		player.shuffleType = saved.shuffleType ?? 0;
-		player.duration = saved.duration ?? 0;
-		player.isPlaying = false;
+		if (raw) {
+			const saved = JSON.parse(raw);
+			player.volume = saved.volume ?? 1;
+			player.muted = saved.muted ?? false;
+			player.loopType = saved.loopType ?? 0;
+			player.shuffleType = saved.shuffleType ?? 0;
+			player.duration = saved.duration ?? 0;
+			player.isPlaying = false;
 
-		if (saved.track) {
-			player.track = saved.track;
-			startAudio(saved.track, false);
+			if (saved.track) {
+				player.track = saved.track;
+				startAudio(saved.track, false);
 
-			if (audio && saved.currentTime) {
-				const seek = () => {
-					audio!.currentTime = saved.currentTime;
-					player.currentTime = saved.currentTime;
-					audio!.removeEventListener("canplay", seek);
-				};
-				audio.addEventListener("canplay", seek);
+				const el = audio;
+				if (el && saved.currentTime) {
+					const seekToSaved = () => {
+						el.currentTime = saved.currentTime;
+						player.currentTime = saved.currentTime;
+						el.removeEventListener("canplay", seekToSaved);
+					};
+					el.addEventListener("canplay", seekToSaved);
+				}
 			}
 		}
 	} catch {}
 	try {
 		const raw = localStorage.getItem(queueKey());
-		if (!raw) return;
-		const saved = JSON.parse(raw);
-		setQueuedTracks(saved.tracks ?? []);
-		setQueueIndex(saved.index ?? -1);
-		setLastQueuedSet(saved.lastSet ?? []);
+		if (raw) {
+			const saved = JSON.parse(raw);
+			setQueuedTracks(saved.tracks ?? []);
+			setQueueIndex(saved.index ?? -1);
+			setLastQueuedSet(saved.lastSet ?? []);
+		}
 	} catch {}
 }
 
@@ -307,8 +436,6 @@ export function savePlayerState() {
 		}));
 	} catch {}
 }
-
-// ─── Public API ───────────────────────────────────────────────────────────────
 
 function withSource(track: Track, sourceUid: string | null | undefined): Track {
 	return { ...track, play_source_uid: sourceUid ?? null };
@@ -409,9 +536,12 @@ export function reorderQueue(fromDisplayIndices: number[], toDisplayIndex: numbe
 	const without = queuedTracks.filter((_, i) => !movingSet.has(i));
 
 	const anchorTrack = queuedTracks[absTo];
-	const anchorIndexInWithout = without.indexOf(anchorTrack);
+	let insertAt = without.indexOf(anchorTrack);
+	if (insertAt === -1) {
+		insertAt = absTo - absIndices.filter(i => i < absTo).length;
+	}
 
-	without.splice(anchorIndexInWithout, 0, ...removed);
+	without.splice(insertAt, 0, ...removed);
 	setQueuedTracks(without);
 }
 
@@ -434,8 +564,8 @@ export function insertIntoQueue(tracksIn: Track[], afterDisplayIndex?: number, s
 }
 
 export function seek(seconds: number) {
-	scrobbleMarkSeeked();
 	if (!audio || !isFinite(seconds)) return;
+	scrobbleMarkSeeked();
 	audio.currentTime = seconds;
 }
 
@@ -450,7 +580,6 @@ export function toggleMute() {
 }
 
 export function skipBack() {
-	scrobbleEnd(audio!.currentTime, "backbtn", true);
 	const el = audio;
 	if (!el) return;
 
@@ -461,12 +590,14 @@ export function skipBack() {
 
 	if (getQueueIndex() < 1) return;
 
+	scrobbleEnd(el.currentTime, "backbtn", true);
 	setQueueIndex(getQueueIndex() - 1);
 	playTrack(queuedTracks[getQueueIndex()]);
 }
 
 export function skipNext() {
-	scrobbleEnd(audio!.currentTime, "fwdbtn", true);
+	if (queuedTracks.length === 0) return;
+
 	let nextIndex = getQueueIndex() + 1;
 	if (nextIndex >= queuedTracks.length) {
 		if (player.loopType === 2) {
@@ -476,16 +607,19 @@ export function skipNext() {
 		}
 	}
 
+	if (audio) scrobbleEnd(audio.currentTime, "fwdbtn", true);
 	setQueueIndex(nextIndex);
 	playTrack(queuedTracks[getQueueIndex()]);
 }
 
 export function toggleLoop() {
 	player.loopType = (player.loopType + 1) % 3;
+	syncMediaInfo();
 }
 
 export function toggleShuffle() {
 	player.shuffleType = (player.shuffleType + 1) % 3;
+	syncMediaInfo();
 }
 
 export function togglePlay() {
@@ -497,6 +631,8 @@ export function togglePlay() {
 		scrobbleMarkPaused();
 		audio.pause();
 	} else {
-		audio.play();
+		audio.play().catch(() => {});
 	}
+
+	UpdateTitle();
 }
