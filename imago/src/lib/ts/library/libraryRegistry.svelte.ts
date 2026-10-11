@@ -28,6 +28,10 @@ export async function updateLibrary(libUid: string, update: LibraryUpdate): Prom
 	emitLibraryChange("libraries:changed");
 }
 
+export async function libraryHasCredentials(libUid: string): Promise<boolean> {
+	return invoke<boolean>("library_has_credentials_cmd", { libUid });
+}
+
 export async function deleteLibrary(libUid: string, deleteFile: boolean): Promise<void> {
 	await invoke("delete_library_cmd", { libUid, deleteFile });
 	emitLibraryChange("libraries:changed");

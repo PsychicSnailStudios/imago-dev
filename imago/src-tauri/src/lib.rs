@@ -445,6 +445,7 @@ pub fn run() {
 			commands::libraries::update_library_cmd,
 			commands::libraries::delete_library_cmd,
 			commands::libraries::sync_library_cmd,
+			commands::libraries::library_has_credentials_cmd,
 			commands::libraries::push_library_cmd,
 			commands::libraries::check_write_permission_cmd,
 			commands::libraries::rebuild_merged_cmd,

@@ -42,7 +42,9 @@
 		checkWritePermission,
 		rebuildMerged,
 		addPathToLibrary,
+		libraryHasCredentials,
 	} from "$ts/library/libraryRegistry.svelte";
+	import LibraryCredentialsDialog from "$lib/components/dialogs/LibraryCredentialsDialog.svelte";
 	import { scanState } from "$ts/store/session.svelte";
 	import { showWarning } from "$ts/ui/dialogManager.svelte";
 	import { loadLibrary } from "$ts/store/library.svelte";
@@ -103,7 +105,57 @@
 		if (selected) libStates[libUid].newPath = selected as string;
 	}
 
+	let credsOpen = $state(false);
+	let credsLibUid = $state("");
+	let credsMessage = $state("");
+	let credsAllowSkip = $state(false);
+	let credsPendingAdd = $state(false);
+
+	function openCredentials(libUid: string, message = "", pendingAdd = false) {
+		credsLibUid = libUid;
+		credsMessage = message;
+		credsAllowSkip = pendingAdd;
+		credsPendingAdd = pendingAdd;
+		credsOpen = true;
+	}
+
+	function credsLibName(): string {
+		return libraryStore.libraries.find((l) => l.uid === credsLibUid)?.name ?? "";
+	}
+
+	function isWebAddress(value: string): boolean {
+		return /^https?:\/\//i.test(value.trim());
+	}
+
 	async function addPath(libUid: string) {
+		const s = libStates[libUid];
+		if (!s.newPath.trim()) return;
+		if (isWebAddress(s.newPath) && !(await libraryHasCredentials(libUid))) {
+			openCredentials(
+				libUid,
+				"This is a web address. If the server needs a login, enter it now; it is stored with this library.",
+				true
+			);
+			return;
+		}
+		await doAddPath(libUid);
+	}
+
+	async function onCredsSaved() {
+		if (credsPendingAdd) {
+			credsPendingAdd = false;
+			await doAddPath(credsLibUid);
+		}
+	}
+
+	async function onCredsSkipped() {
+		if (credsPendingAdd) {
+			credsPendingAdd = false;
+			await doAddPath(credsLibUid);
+		}
+	}
+
+	async function doAddPath(libUid: string) {
 		const s = libStates[libUid];
 		if (!s.newPath.trim()) return;
 		s.addingPath = true;
@@ -234,8 +286,16 @@
 		});
 
 		await listen("scan:error", (event: any) => {
-			scanState.status = `Scan error: ${event.payload}`;
+			const message = String(event.payload);
+			scanState.status = `Scan error: ${message}`;
 			scanState.loading = false;
+			toast.error("Scan failed", { description: message });
+			if (lastScannedLibUid && /refused access/i.test(message)) {
+				openCredentials(
+					lastScannedLibUid,
+					"The server refused the login. Enter the correct username and password."
+				);
+			}
 		});
 	});
 
@@ -280,6 +340,10 @@
 		try {
 			const pulled = await syncLibrary(libUid, force);
 			await loadLibraryRegistry();
+			if (pulled) {
+				await loadPathsForLib(libUid);
+				await loadLibrary();
+			}
 			if (pulled) toast.success("Pulled the latest changes");
 			else toast.info("Already up to date");
 		} catch (e) {
@@ -596,6 +660,10 @@
 									<MoreHorizontal class="w-3.5 h-3.5" />
 								</DropdownMenu.Trigger>
 								<DropdownMenu.Content align="end">
+									<DropdownMenu.Item onclick={() => openCredentials(lib.uid)}>
+										<Lock class="w-3.5 h-3.5 mr-2" />
+										Set username and password…
+									</DropdownMenu.Item>
 									{#if lib.sync_url}
 										<DropdownMenu.Item onclick={() => handleForcePull(lib.uid)}>
 											<Download class="w-3.5 h-3.5 mr-2" />
@@ -736,3 +804,13 @@
 		</div>
 	{/if}
 </div>
+
+<LibraryCredentialsDialog
+	bind:open={credsOpen}
+	libUid={credsLibUid}
+	libName={credsLibName()}
+	message={credsMessage}
+	allowSkip={credsAllowSkip}
+	onsaved={onCredsSaved}
+	onskip={onCredsSkipped}
+/>

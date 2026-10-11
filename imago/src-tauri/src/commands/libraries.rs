@@ -55,7 +55,25 @@ pub fn update_library_cmd(
     }
     let uid = state.get_uid();
     let conn = open_settings_conn(&uid);
-    crate::db::library_registry::update_library(&conn, &lib_uid, &update).map_err(|e| e.to_string())
+    crate::db::library_registry::update_library(&conn, &lib_uid, &update)
+        .map_err(|e| e.to_string())?;
+    crate::webdav::clear_credential_cache();
+    Ok(())
+}
+
+#[tauri::command]
+pub fn library_has_credentials_cmd(
+    state: State<AppState>,
+    lib_uid: String,
+) -> Result<bool, String> {
+    let uid = state.get_uid();
+    let conn = open_settings_conn(&uid);
+    let lib = crate::db::library_registry::get_library_by_uid(&conn, &lib_uid)
+        .map_err(|e| e.to_string())?;
+    Ok(lib
+        .and_then(|l| l.write_token)
+        .map(|t| !t.trim().is_empty())
+        .unwrap_or(false))
 }
 
 #[tauri::command]

@@ -386,6 +386,10 @@ fn credential_cache() -> &'static Mutex<HashMap<String, (Instant, Option<String>
 	CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+pub fn clear_credential_cache() {
+	credential_cache().lock().unwrap().clear();
+}
+
 pub fn credentials_for_url(profile_uid: &str, url: &str) -> Option<String> {
 	let origin = origin_of(url);
 	let cache_key = format!("{}|{}", profile_uid, origin);
