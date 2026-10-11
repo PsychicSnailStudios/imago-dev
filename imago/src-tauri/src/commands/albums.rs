@@ -88,10 +88,7 @@ pub async fn update_album_entry(
                 }
                 library_manager::sync_album(&profile_uid, &lib.uid, &uid)?;
             }
-            Err(_) => {
-                let conn = open_lib_conn(&profile_uid);
-                update_album_by_uid(&conn, &uid, &update).map_err(|e| e.to_string())?;
-            }
+            Err(e) => return Err(e),
         }
         Ok(())
     })
@@ -107,10 +104,7 @@ pub async fn delete_album_entry(state: State<'_, AppState>, uid: String) -> Resu
                 delete_album_by_uid(&source_conn, &uid).map_err(|e| e.to_string())?;
                 library_manager::sync_album(&profile_uid, &lib.uid, &uid)?;
             }
-            Err(_) => {
-                let conn = open_lib_conn(&profile_uid);
-                delete_album_by_uid(&conn, &uid).map_err(|e| e.to_string())?;
-            }
+            Err(e) => return Err(e),
         }
         Ok(())
     })

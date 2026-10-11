@@ -32,7 +32,7 @@ fn remove_path_from_lib_db(conn: &Connection, path: &str) -> rusqlite::Result<()
     Ok(())
 }
 
-fn get_paths_from_lib_db(conn: &Connection) -> rusqlite::Result<Vec<LibraryPath>> {
+pub fn get_paths_from_lib_db(conn: &Connection) -> rusqlite::Result<Vec<LibraryPath>> {
     let mut stmt = conn.prepare("SELECT id, path FROM library_paths ORDER BY id ASC")?;
     let rows = stmt.query_map([], |row| {
         Ok(LibraryPath {
@@ -112,7 +112,15 @@ pub fn add_path(
     path: String,
     lib_uid: Option<String>,
 ) -> Result<(), String> {
-    let path = normalize_path(&path);
+    let is_web = crate::webdav::is_http_url(&path);
+    let path = if is_web {
+        crate::webdav::encode_url_spaces(&path)
+    } else {
+        normalize_path(&path)
+    };
+    if !is_web && !std::path::Path::new(&path).is_dir() {
+        return Err(format!("Folder not found or not reachable: {}", path));
+    }
     let uid = state.get_uid();
     let settings_conn = open_settings_conn(&uid);
 
@@ -139,11 +147,22 @@ pub fn add_path(
             })
     };
 
+    if let Ok(Some(lib)) = crate::db::library_registry::get_library_by_uid(&settings_conn, &target_lib_uid) {
+        library_manager::ensure_library_file_usable(&lib)?;
+    }
+
     {
-        let lib_conn = Connection::open(&lib_file_path).map_err(|e| e.to_string())?;
+        let lib_conn = library_manager::open_tuned(&lib_file_path)
+            .map_err(|e| format!("Could not open the library database: {}", e))?;
         crate::db::init_library_db(&lib_conn).map_err(|e| e.to_string())?;
         add_path_to_lib_db(&lib_conn, &path).map_err(|e| e.to_string())?;
     }
+
+    let creds: Option<String> =
+        crate::db::library_registry::get_library_by_uid(&settings_conn, &target_lib_uid)
+            .ok()
+            .flatten()
+            .and_then(|l| l.write_token);
 
     let app_clone = app.clone();
     let path_clone = path.clone();
@@ -152,7 +171,14 @@ pub fn add_path(
     let lib_file_path_clone = lib_file_path.clone();
 
     std::thread::spawn(move || {
-        let lib_conn = Connection::open(&lib_file_path_clone).expect("Failed to open library db");
+        let lib_conn = match library_manager::open_tuned(&lib_file_path_clone) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("[add_path] could not open library db: {e}");
+                app_clone.emit("scan:done", ()).ok();
+                return;
+            }
+        };
         let settings_path = get_settings_db_path(&uid_clone);
         lib_conn
             .execute_batch(&format!(
@@ -160,7 +186,13 @@ pub fn add_path(
                 settings_path.to_string_lossy().replace('\'', "''")
             ))
             .ok();
-        crate::scanner::scan_directory_with_progress(&lib_conn, &path_clone, &app_clone);
+        crate::scanner::scan_directory_with_creds(
+            &lib_conn,
+            &path_clone,
+            &app_clone,
+            false,
+            creds.as_deref(),
+        );
 
         let _ = library_manager::incremental_update(&uid_clone, &[lib_uid_clone.clone()]);
 
@@ -190,9 +222,14 @@ fn path_key(path: &str) -> String {
 const NORMALISED_TRACK_PATH: &str = "LOWER(REPLACE(path, char(92), '/'))";
 
 fn delete_tracks_under_path(conn: &Connection, key: &str) -> rusqlite::Result<usize> {
+    let column_expr = if key.starts_with("http://") || key.starts_with("https://") {
+        "LOWER(COALESCE(remote_path, ''))"
+    } else {
+        NORMALISED_TRACK_PATH
+    };
     let cond = format!(
         "({n} = ?1 OR substr({n}, 1, length(?1) + 1) = ?1 || '/')",
-        n = NORMALISED_TRACK_PATH
+        n = column_expr
     );
     conn.execute(
         &format!(
@@ -354,7 +391,11 @@ pub fn rescan_path_cmd(
     }
 
     let lib = find_library_for_path(&uid, &key)?;
-    let scan_path = normalize_path(&path);
+    let scan_path = if crate::webdav::is_http_url(&path) {
+        crate::webdav::encode_url_spaces(&path)
+    } else {
+        normalize_path(&path)
+    };
 
     std::thread::spawn(move || {
         let lib_conn = match library_manager::open_tuned(&lib.file_path) {
@@ -392,11 +433,13 @@ pub fn rescan_path_cmd(
             app.emit("library:updated", ()).ok();
         }
 
-        if mode == "new" {
-            crate::scanner::scan_directory_new_only(&lib_conn, &scan_path, &app);
-        } else {
-            crate::scanner::scan_directory_with_progress(&lib_conn, &scan_path, &app);
-        }
+        crate::scanner::scan_directory_with_creds(
+            &lib_conn,
+            &scan_path,
+            &app,
+            mode == "new",
+            lib.write_token.as_deref(),
+        );
 
         if let Err(e) = library_manager::incremental_update(&uid, &[lib.uid.clone()]) {
             eprintln!("[rescan_path] merge failed: {e}");
@@ -462,6 +505,7 @@ pub fn rescan(app: AppHandle, state: State<AppState>) -> Result<(), String> {
     for lib in all_libs {
         let lib_file_path = lib.file_path.clone();
         let lib_uid = lib.uid.clone();
+        let lib_token = lib.write_token.clone();
         let uid_clone = uid.clone();
         let app_clone = app.clone();
 
@@ -493,7 +537,13 @@ pub fn rescan(app: AppHandle, state: State<AppState>) -> Result<(), String> {
                 .ok();
 
             for p in &paths_clone {
-                crate::scanner::scan_directory_with_progress(&lib_conn, p, &app_clone);
+                crate::scanner::scan_directory_with_creds(
+                    &lib_conn,
+                    p,
+                    &app_clone,
+                    false,
+                    lib_token.as_deref(),
+                );
             }
 
             let _ = library_manager::incremental_update(&uid_clone, &[lib_uid.clone()]);

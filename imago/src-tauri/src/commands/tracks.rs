@@ -87,10 +87,7 @@ pub async fn update_track_metadata(
                 ensure_tag(&source_conn, &update.tags, &update.genres);
                 library_manager::sync_track(&profile_uid, &lib.uid, &uid)?;
             }
-            Err(_) => {
-                let conn = open_lib_conn(&profile_uid);
-                update_track_metadata_by_uid(&conn, &uid, &update).map_err(|e| e.to_string())?;
-            }
+            Err(e) => return Err(e),
         }
         Ok(())
     })
@@ -186,10 +183,7 @@ fn write_track_tags_blocking(
             ensure_tag(&source_conn, &update.tags, &update.genres);
             library_manager::sync_track(&profile_uid, &lib.uid, &uid)?;
         }
-        Err(_) => {
-            let conn = open_lib_conn(&profile_uid);
-            update_track_metadata_by_uid(&conn, &uid, &update).map_err(|e| e.to_string())?;
-        }
+        Err(e) => return Err(e),
     }
 
     app.emit("library:updated", ()).ok();
@@ -205,10 +199,7 @@ pub async fn remove_track_from_library(state: State<'_, AppState>, uid: String) 
                 db::delete_track_by_uid(&source_conn, &uid).map_err(|e| e.to_string())?;
                 library_manager::sync_track(&profile_uid, &lib.uid, &uid)?;
             }
-            Err(_) => {
-                let conn = open_lib_conn(&profile_uid);
-                db::delete_track_by_uid(&conn, &uid).map_err(|e| e.to_string())?;
-            }
+            Err(e) => return Err(e),
         }
         Ok(())
     })
@@ -230,10 +221,7 @@ pub async fn delete_track_file(
                 db::delete_track_by_uid(&source_conn, &uid).map_err(|e| e.to_string())?;
                 library_manager::sync_track(&profile_uid, &lib.uid, &uid)?;
             }
-            Err(_) => {
-                let conn = open_lib_conn(&profile_uid);
-                db::delete_track_by_uid(&conn, &uid).map_err(|e| e.to_string())?;
-            }
+            Err(e) => return Err(e),
         }
         app.emit("library:updated", ()).ok();
         Ok(())
@@ -265,14 +253,7 @@ pub async fn merge_remote_local_tracks(
                     &[],
                 )?;
             }
-            Err(_) => {
-                let conn = open_lib_conn(&profile_uid);
-                let drop_track = db::get_track_by_uid(&conn, &drop_uid)
-                    .map_err(|e| e.to_string())?
-                    .ok_or("Drop track not found")?;
-                crate::scanner::merge_paths_into_existing(&conn, &keep_uid, &drop_track);
-                db::delete_track_by_uid(&conn, &drop_uid).map_err(|e| e.to_string())?;
-            }
+            Err(e) => return Err(e),
         }
         app.emit("library:updated", ()).ok();
         Ok(())
@@ -364,15 +345,7 @@ pub async fn replace_track_path(
             }
             library_manager::sync_track(&profile_uid, &lib.uid, &uid)?;
         }
-        Err(_) => {
-            let lib_conn = open_lib_conn(&profile_uid);
-            lib_conn
-                .execute(
-                    "UPDATE tracks SET path = ?1 WHERE uid = ?2",
-                    rusqlite::params![new_path, uid],
-                )
-                .map_err(|e| e.to_string())?;
-        }
+        Err(e) => return Err(e),
     }
 
     app.emit("library:updated", ()).ok();

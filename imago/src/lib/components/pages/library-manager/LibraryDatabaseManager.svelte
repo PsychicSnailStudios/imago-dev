@@ -119,6 +119,7 @@
 		} catch (e) {
 			scanState.status = `Error: ${e}`;
 			scanState.loading = false;
+			toast.error("Could not add folder", { description: String(e) });
 		} finally {
 			s.addingPath = false;
 		}
@@ -264,11 +265,23 @@
 		}
 	}
 
-	async function handleSync(libUid: string) {
+	async function handleForcePull(libUid: string) {
+		const confirmed = await showWarning({
+			title: "Replace the local copy?",
+			description:
+				"The library is downloaded again from the remote and your local copy is overwritten. Any changes you have not pushed are lost.",
+		});
+		if (!confirmed) return;
+		await handleSync(libUid, true);
+	}
+
+	async function handleSync(libUid: string, force = false) {
 		syncingUid = libUid;
 		try {
-			await syncLibrary(libUid);
+			const pulled = await syncLibrary(libUid, force);
 			await loadLibraryRegistry();
+			if (pulled) toast.success("Pulled the latest changes");
+			else toast.info("Already up to date");
 		} catch (e) {
 			toast.error("Could not reach remote library", {
 				description: String(e),
@@ -282,6 +295,10 @@
 		pushingUid = libUid;
 		try {
 			await pushLibrary(libUid);
+			await loadLibraryRegistry();
+			toast.success("Library pushed to remote");
+		} catch (e) {
+			toast.error("Push failed", { description: String(e) });
 		} finally {
 			pushingUid = null;
 		}
@@ -290,8 +307,12 @@
 	async function handleCheckPermission(libUid: string) {
 		checkingUid = libUid;
 		try {
-			await checkWritePermission(libUid);
+			const allowed = await checkWritePermission(libUid);
 			await loadLibraryRegistry();
+			if (allowed) toast.success("You have write access to this library");
+			else toast.error("No write access", { description: "The remote rejected the write check, or the token is missing or wrong." });
+		} catch (e) {
+			toast.error("Could not check write access", { description: String(e) });
 		} finally {
 			checkingUid = null;
 		}
@@ -418,7 +439,7 @@
 			{#if importUrl.startsWith('http://') || importUrl.startsWith('https://')}
 				<div class="flex flex-col gap-1">
 					<label class="text-xs font-medium text-muted-foreground">Write token (optional)</label>
-					<input bind:value={importToken} type="password" placeholder="Leave blank for read-only" class="border rounded px-3 py-2 text-sm bg-background" />
+					<input bind:value={importToken} type="password" placeholder="Token, or username:password for WebDAV (blank for read-only)" class="border rounded px-3 py-2 text-sm bg-background" />
 				</div>
 			{/if}
 			{#if importError}
@@ -576,6 +597,10 @@
 								</DropdownMenu.Trigger>
 								<DropdownMenu.Content align="end">
 									{#if lib.sync_url}
+										<DropdownMenu.Item onclick={() => handleForcePull(lib.uid)}>
+											<Download class="w-3.5 h-3.5 mr-2" />
+											Force pull (replace local copy)
+										</DropdownMenu.Item>
 										<DropdownMenu.Item onclick={() => handleCheckPermission(lib.uid)}>
 											{#if checkingUid === lib.uid}
 												<Loader2 class="w-3.5 h-3.5 mr-2 animate-spin" />
@@ -670,7 +695,7 @@
 							<div class="flex gap-2 pt-1">
 								<input
 									bind:value={s.newPath}
-									placeholder="Folder path…"
+									placeholder="Folder path, share path or WebDAV address…"
 									class="flex-1 border rounded px-3 py-1.5 text-xs bg-background"
 									onkeydown={(e) => e.key === "Enter" && addPath(lib.uid)}
 								/>

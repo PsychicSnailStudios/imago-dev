@@ -1825,26 +1825,164 @@ pub enum ScanMode {
 }
 
 pub fn scan_directory_with_progress(conn: &Connection, dir: &str, app: &AppHandle) {
-    scan_directory_impl(conn, dir, app, ScanMode::Full);
+    scan_directory_impl(conn, dir, app, ScanMode::Full, None);
 }
 
 pub fn scan_directory_new_only(conn: &Connection, dir: &str, app: &AppHandle) {
-    scan_directory_impl(conn, dir, app, ScanMode::NewOnly);
+    scan_directory_impl(conn, dir, app, ScanMode::NewOnly, None);
+}
+
+pub fn scan_directory_with_creds(
+    conn: &Connection,
+    dir: &str,
+    app: &AppHandle,
+    new_only: bool,
+    creds: Option<&str>,
+) {
+    let mode = if new_only {
+        ScanMode::NewOnly
+    } else {
+        ScanMode::Full
+    };
+    scan_directory_impl(conn, dir, app, mode, creds);
+}
+
+enum ScanItem {
+    Local(std::path::PathBuf),
+    Remote(crate::webdav::RemoteFile),
+}
+
+const REMOTE_PREFIX_BYTES: u64 = 1024 * 1024;
+const REMOTE_FULL_DOWNLOAD_LIMIT: u64 = 80 * 1024 * 1024;
+
+fn sanitize_component(name: &str) -> String {
+    name.chars()
+        .map(|c| match c {
+            '<' | '>' | ':' | '"' | '|' | '?' | '*' | '\\' | '/' => '_',
+            _ => c,
+        })
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn read_remote_item(
+    remote: &crate::webdav::RemoteFile,
+    creds: Option<&str>,
+    temp_root: &Path,
+    priority_title: &str,
+    priority_artist: &str,
+    priority_album: &str,
+    priority_year: &str,
+    custom_pattern: &str,
+    artist_tag_delimiters: &[&str],
+    artist_filename_delimiters: &[&str],
+    genre_delimiters: &[&str],
+    try_ampersand: bool,
+) -> Option<Track> {
+    let mut temp_path = temp_root.to_path_buf();
+    for comp in remote.rel_path.split('/').filter(|c| !c.is_empty()) {
+        temp_path.push(sanitize_component(comp));
+    }
+    if let Some(parent) = temp_path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+
+    let attempts: Vec<(Option<u64>, bool)> = {
+        let mut a = vec![(Some(REMOTE_PREFIX_BYTES), false)];
+        if remote.size == 0 || remote.size > REMOTE_PREFIX_BYTES {
+            if remote.size == 0 || remote.size <= REMOTE_FULL_DOWNLOAD_LIMIT {
+                a.push((None, true));
+            }
+        }
+        a
+    };
+
+    let mut result: Option<Track> = None;
+    for (limit, full) in attempts {
+        let bytes = match tauri::async_runtime::block_on(crate::webdav::fetch_prefix(
+            &remote.url,
+            creds,
+            limit,
+        )) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("[scanner] {}: {}", remote.url, e);
+                continue;
+            }
+        };
+        if std::fs::write(&temp_path, &bytes).is_err() {
+            continue;
+        }
+        let is_complete = full || (remote.size > 0 && bytes.len() as u64 >= remote.size);
+        let parsed = read_track_with_settings(
+            &temp_path,
+            priority_title,
+            priority_artist,
+            priority_album,
+            priority_year,
+            custom_pattern,
+            artist_tag_delimiters,
+            artist_filename_delimiters,
+            genre_delimiters,
+            try_ampersand,
+        );
+        if let Some(mut track) = parsed {
+            track.path = String::new();
+            track.remote_path = Some(remote.url.clone());
+            track.last_modified = remote.modified;
+
+            if !is_complete && remote.size > 0 {
+                let lossy = matches!(
+                    track.format.as_deref().map(|f| f.to_uppercase()).as_deref(),
+                    Some("MP3") | Some("M4A") | Some("AAC") | Some("OGG") | Some("OPUS")
+                );
+                if lossy {
+                    if let Some(kbps) = track.bitrate.filter(|b| *b > 0) {
+                        track.duration_ms = Some((remote.size as i64 * 8) / kbps);
+                    }
+                }
+            }
+            result = Some(track);
+            break;
+        }
+    }
+
+    std::fs::remove_file(&temp_path).ok();
+    result
 }
 
 fn known_track_stamps(conn: &Connection) -> std::collections::HashMap<String, i64> {
     let mut known = std::collections::HashMap::new();
-    if let Ok(mut stmt) = conn.prepare("SELECT path, last_modified FROM tracks WHERE path != ''") {
-        if let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))) {
-            for row in rows.flatten() {
-                known.insert(row.0.replace('\\', "/").to_lowercase(), row.1);
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT COALESCE(path, ''), last_modified, COALESCE(remote_path, '') FROM tracks",
+    ) {
+        if let Ok(rows) = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        }) {
+            for (path, stamp, remote) in rows.flatten() {
+                if !path.is_empty() {
+                    known.insert(path.replace('\\', "/").to_lowercase(), stamp);
+                }
+                if !remote.is_empty() {
+                    known.insert(remote.to_lowercase(), stamp);
+                }
             }
         }
     }
     known
 }
 
-fn scan_directory_impl(conn: &Connection, dir: &str, app: &AppHandle, mode: ScanMode) {
+fn scan_directory_impl(
+    conn: &Connection,
+    dir: &str,
+    app: &AppHandle,
+    mode: ScanMode,
+    creds: Option<&str>,
+) {
     conn.execute_batch(
         "PRAGMA journal_mode = WAL;
 		 PRAGMA synchronous = NORMAL;
@@ -1931,21 +2069,47 @@ fn scan_directory_impl(conn: &Connection, dir: &str, app: &AppHandle, mode: Scan
         .unwrap_or_else(|| GENRE_DELIMITERS.iter().map(|s| s.to_string()).collect());
     let genre_delimiters: Vec<&str> = genre_delimiters_owned.iter().map(|s| s.as_str()).collect();
 
-    let mut all_files: Vec<_> = WalkDir::new(dir)
-        .follow_links(true)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file() && is_supported(e.path()))
-        .collect();
+    let is_remote_scan = crate::webdav::is_http_url(dir);
+    let temp_root = std::env::temp_dir().join(format!("sonodex_dav_scan_{}", std::process::id()));
+
+    let mut all_files: Vec<ScanItem> = if is_remote_scan {
+        let audio_check = |name: &str| is_supported(Path::new(name));
+        match tauri::async_runtime::block_on(crate::webdav::collect_audio_files(
+            dir,
+            creds,
+            &audio_check,
+        )) {
+            Ok(files) => files.into_iter().map(ScanItem::Remote).collect(),
+            Err(e) => {
+                eprintln!("[scanner] remote listing failed: {e}");
+                app.emit("scan:error", e).ok();
+                Vec::new()
+            }
+        }
+    } else {
+        WalkDir::new(dir)
+            .follow_links(true)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().is_file() && is_supported(e.path()))
+            .map(|e| ScanItem::Local(e.path().to_path_buf()))
+            .collect()
+    };
 
     if mode == ScanMode::NewOnly {
         let known = known_track_stamps(conn);
-        all_files.retain(|e| {
-            let key = e.path().to_string_lossy().replace('\\', "/").to_lowercase();
-            match known.get(&key) {
-                Some(stamp) => *stamp != get_last_modified(e.path()),
-                None => true,
+        all_files.retain(|item| match item {
+            ScanItem::Local(p) => {
+                let key = p.to_string_lossy().replace('\\', "/").to_lowercase();
+                match known.get(&key) {
+                    Some(stamp) => *stamp != get_last_modified(p),
+                    None => true,
+                }
             }
+            ScanItem::Remote(r) => match known.get(&r.url.to_lowercase()) {
+                Some(stamp) => *stamp != r.modified,
+                None => true,
+            },
         });
     }
 
@@ -1968,19 +2132,36 @@ fn scan_directory_impl(conn: &Connection, dir: &str, app: &AppHandle, mode: Scan
 
     conn.execute_batch("BEGIN DEFERRED").ok();
 
-    for entry in all_files {
-        if let Some(track) = read_track_with_settings(
-            entry.path(),
-            &priority_title,
-            &priority_artist,
-            &priority_album,
-            &priority_year,
-            &custom_pattern,
-            &artist_tag_delimiters,
-            &artist_filename_delimiters,
-            &genre_delimiters,
-            try_ampersand,
-        ) {
+    for item in all_files {
+        let read_result = match &item {
+            ScanItem::Local(path) => read_track_with_settings(
+                path,
+                &priority_title,
+                &priority_artist,
+                &priority_album,
+                &priority_year,
+                &custom_pattern,
+                &artist_tag_delimiters,
+                &artist_filename_delimiters,
+                &genre_delimiters,
+                try_ampersand,
+            ),
+            ScanItem::Remote(remote) => read_remote_item(
+                remote,
+                creds,
+                &temp_root,
+                &priority_title,
+                &priority_artist,
+                &priority_album,
+                &priority_year,
+                &custom_pattern,
+                &artist_tag_delimiters,
+                &artist_filename_delimiters,
+                &genre_delimiters,
+                try_ampersand,
+            ),
+        };
+        if let Some(track) = read_result {
             if let Some(existing_uid) = find_remote_local_counterpart(conn, &track) {
                 merge_paths_into_existing(conn, &existing_uid, &track);
                 scanned += 1;
@@ -2057,9 +2238,16 @@ fn scan_directory_impl(conn: &Connection, dir: &str, app: &AppHandle, mode: Scan
             )
             .ok();
         }
+        if is_remote_scan && scanned % 25 == 0 {
+            conn.execute_batch("COMMIT").ok();
+            conn.execute_batch("BEGIN DEFERRED").ok();
+        }
     }
 
     conn.execute_batch("COMMIT").ok();
+    if is_remote_scan {
+        std::fs::remove_dir_all(&temp_root).ok();
+    }
 
     let duplicates = crate::db::find_duplicates(conn).unwrap_or_default();
     if !duplicates.is_empty() {

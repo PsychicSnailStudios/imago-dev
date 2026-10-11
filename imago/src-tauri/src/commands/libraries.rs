@@ -45,8 +45,14 @@ pub fn export_library_cmd(
 pub fn update_library_cmd(
     state: State<AppState>,
     lib_uid: String,
-    update: LibraryUpdate,
+    mut update: LibraryUpdate,
 ) -> Result<(), String> {
+    if let Some(u) = update.sync_url.as_mut() {
+        *u = library_manager::normalize_sync_location(u);
+    }
+    if let Some(u) = update.sync_meta_url.as_mut() {
+        *u = library_manager::normalize_sync_location(u);
+    }
     let uid = state.get_uid();
     let conn = open_settings_conn(&uid);
     crate::db::library_registry::update_library(&conn, &lib_uid, &update).map_err(|e| e.to_string())
@@ -73,9 +79,11 @@ pub async fn sync_library_cmd(
     app: AppHandle,
     state: State<'_, AppState>,
     lib_uid: String,
+    force: Option<bool>,
 ) -> Result<bool, String> {
     let uid = state.get_uid();
-    let pulled = library_manager::try_pull_library(&uid, &lib_uid).await?;
+    let pulled =
+        library_manager::try_pull_library(&uid, &lib_uid, force.unwrap_or(false)).await?;
     if pulled {
         let rebuild_uid = uid.clone();
         library_manager::run_blocking(move || library_manager::full_rebuild(&rebuild_uid)).await?;
@@ -91,7 +99,23 @@ pub async fn push_library_cmd(state: State<'_, AppState>, lib_uid: String) -> Re
     let lib = crate::db::library_registry::get_library_by_uid(&conn, &lib_uid)
         .map_err(|e| e.to_string())?
         .ok_or("Library not found")?;
-    Ok(library_manager::try_push_library(&lib).await)
+    library_manager::push_library_checked(&lib).await?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let update = crate::db::library_registry::LibraryUpdate {
+        name: None,
+        sync_url: None,
+        sync_meta_url: None,
+        write_token: None,
+        has_write_permission: None,
+        last_synced: Some(now),
+        last_data_version: None,
+        sort_order: None,
+    };
+    crate::db::library_registry::update_library(&conn, &lib_uid, &update).ok();
+    Ok(true)
 }
 
 #[tauri::command]

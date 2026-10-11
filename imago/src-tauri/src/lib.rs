@@ -1,4 +1,5 @@
 mod artwork;
+mod webdav;
 mod commands;
 mod connections;
 mod db;
@@ -181,9 +182,11 @@ pub fn run() {
 			.expect("Failed to open settings db");
 		init_settings_db(&settings_conn).expect("Failed to init settings db");
 
-		let lib_conn =
-			Connection::open(get_lib_db_path(&initial_uid)).expect("Failed to open lib db");
-		init_lib_db(&lib_conn).expect("Failed to init lib db");
+		if get_lib_db_path(&initial_uid).exists() {
+			let lib_conn =
+				Connection::open(get_lib_db_path(&initial_uid)).expect("Failed to open lib db");
+			init_lib_db(&lib_conn).expect("Failed to init lib db");
+		}
 
 		// Bootstrap federated library structure and run on-load merge
 		library_manager::ensure_default_library(&initial_uid)
@@ -211,6 +214,9 @@ pub fn run() {
 		.manage(app_state)
 		.register_asynchronous_uri_scheme_protocol("artwork", |ctx, request, responder| {
 			artwork::handle(ctx.app_handle().clone(), request, responder);
+		})
+		.register_asynchronous_uri_scheme_protocol("davstream", |ctx, request, responder| {
+			webdav::handle_stream(ctx.app_handle().clone(), request, responder);
 		})
 		.plugin(tauri_plugin_media::init())
 		.plugin(tauri_plugin_log::Builder::new().build())

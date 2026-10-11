@@ -24,6 +24,11 @@ pub async fn download_track_cmd(
         .remote_path
         .clone()
         .ok_or("Track has no remote path")?;
+    let remote_creds = if crate::webdav::is_http_url(&remote_path) {
+        crate::webdav::credentials_for_url(&profile_uid, &remote_path)
+    } else {
+        None
+    };
 
     let download_base = db::settings_manager::get_setting(&settings_conn, "download_path")
         .ok()
@@ -110,7 +115,14 @@ pub async fn download_track_cmd(
             .shell()
             .sidecar("ffmpeg")
             .map_err(|e| e.to_string())?
-            .args(["-y", "-i", &remote_path, "-b:a", "320k", &dest_str])
+            .args([
+                "-y",
+                "-i",
+                &crate::webdav::url_with_basic_auth(&remote_path, remote_creds.as_deref()),
+                "-b:a",
+                "320k",
+                &dest_str,
+            ])
             .output()
             .await
             .map_err(|e| e.to_string())?;
@@ -121,10 +133,11 @@ pub async fn download_track_cmd(
         }
     } else if remote_path.starts_with("http://") || remote_path.starts_with("https://") {
         let client = crate::enrichment::make_client()?;
-        let bytes = client
-            .get(&remote_path)
+        let bytes = crate::webdav::auth(client.get(&remote_path), remote_creds.as_deref())
             .send()
             .await
+            .map_err(|e| e.to_string())?
+            .error_for_status()
             .map_err(|e| e.to_string())?
             .bytes()
             .await

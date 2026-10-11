@@ -62,9 +62,6 @@ pub fn create_profile_cmd(
     let settings_conn = open_settings_conn(&profile.uid);
     init_settings_db(&settings_conn).map_err(|e| e.to_string())?;
 
-    let lib_conn = Connection::open(get_lib_db_path(&profile.uid)).map_err(|e| e.to_string())?;
-    init_lib_db(&lib_conn).map_err(|e| e.to_string())?;
-
     library_manager::ensure_default_library(&profile.uid)?;
 
     if let Some(source_uid) = copy_paths_from {
@@ -132,6 +129,9 @@ pub fn switch_profile(uid: String, state: State<AppState>) -> Result<(), String>
     let mut registry = registry;
     registry.active = uid.clone();
     write_registry(&registry);
+    if let Err(e) = crate::library_manager::repair_library_paths(&uid) {
+        eprintln!("[profiles] library path repair failed: {e}");
+    }
     state.set_uid(uid);
     Ok(())
 }

@@ -53,9 +53,35 @@ pub fn tune_conn(conn: &Connection) {
 }
 
 pub fn open_tuned<P: AsRef<std::path::Path>>(path: P) -> Result<Connection, String> {
-	let conn = Connection::open(path.as_ref()).map_err(|e| e.to_string())?;
-	tune_conn(&conn);
-	Ok(conn)
+	let p = path.as_ref();
+	if let Ok(conn) = Connection::open(p) {
+		tune_conn(&conn);
+		return Ok(conn);
+	}
+
+	if let Some(parent) = p.parent() {
+		std::fs::create_dir_all(parent).ok();
+	}
+	let path_str = p.to_string_lossy().to_string();
+	clear_readonly(&path_str);
+
+	match Connection::open(p) {
+		Ok(conn) => {
+			tune_conn(&conn);
+			Ok(conn)
+		}
+		Err(e) => {
+			let readonly = std::fs::metadata(p)
+				.map(|m| m.permissions().readonly())
+				.unwrap_or(false);
+			Err(format!(
+				"{} (file exists: {}, read-only: {})",
+				e,
+				p.exists(),
+				readonly
+			))
+		}
+	}
 }
 
 pub fn remove_wal_files(db_path: &str) {
@@ -70,6 +96,67 @@ pub fn remove_wal_files(db_path: &str) {
 pub fn checkpoint_db(db_path: &str) {
 	if let Ok(conn) = Connection::open(db_path) {
 		let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+	}
+}
+
+pub fn normalize_sync_location(raw: &str) -> String {
+	let trimmed = raw.trim().trim_matches('"').trim();
+	let bytes: Vec<char> = trimmed.chars().collect();
+	let looks_like_lost_unc = bytes.len() > 2
+		&& bytes[0] == '\\'
+		&& bytes[1] != '\\'
+		&& bytes[1].is_alphanumeric()
+		&& trimmed.matches('\\').count() >= 2;
+	if looks_like_lost_unc {
+		format!("\\\\{}", trimmed)
+	} else {
+		trimmed.to_string()
+	}
+}
+
+pub fn with_auth(rb: reqwest::RequestBuilder, token: Option<&str>) -> reqwest::RequestBuilder {
+	match token.map(|t| t.trim()).filter(|t| !t.is_empty()) {
+		Some(t) => match t.split_once(':') {
+			Some((user, pass)) => rb.basic_auth(user, Some(pass)),
+			None => rb.bearer_auth(t),
+		},
+		None => rb,
+	}
+}
+
+pub fn is_sqlite_bytes(bytes: &[u8]) -> bool {
+	bytes.len() >= 16 && &bytes[..15] == b"SQLite format 3"
+}
+
+pub fn ensure_library_file_usable(lib: &Library) -> Result<(), String> {
+	let path = std::path::Path::new(&lib.file_path);
+	if let Some(parent) = path.parent() {
+		std::fs::create_dir_all(parent).ok();
+	}
+	if !path.exists() {
+		return Err(format!(
+			"The local copy of this library is missing ({}). Use Force pull to download it again.",
+			lib.file_path
+		));
+	}
+	if let Ok(meta) = std::fs::metadata(path) {
+		let mut perms = meta.permissions();
+		if perms.readonly() {
+			perms.set_readonly(false);
+			std::fs::set_permissions(path, perms)
+				.map_err(|e| format!("The local library file is read-only and could not be unlocked: {}", e))?;
+		}
+	}
+	Ok(())
+}
+
+pub fn clear_readonly(path: &str) {
+	if let Ok(meta) = std::fs::metadata(path) {
+		let mut perms = meta.permissions();
+		if perms.readonly() {
+			perms.set_readonly(false);
+			std::fs::set_permissions(path, perms).ok();
+		}
 	}
 }
 
@@ -108,11 +195,47 @@ pub fn open_merged_conn(profile_uid: &str) -> Result<Connection, String> {
 
 // Called when a profile is first set up or when the libraries table is empty.
 // Creates the local.db file and registers it as the default library.
+pub fn repair_library_paths(profile_uid: &str) -> Result<usize, String> {
+    let settings_conn = open_tuned(get_settings_db_path(profile_uid))?;
+    let libs = get_all_libraries(&settings_conn).map_err(|e| e.to_string())?;
+    let mut fixed = 0usize;
+
+    for lib in libs {
+        let expected = if lib.is_default {
+            get_local_library_db_path(profile_uid)
+        } else {
+            get_library_db_path(profile_uid, &lib.uid)
+        };
+        let expected_str = expected.to_string_lossy().to_string();
+        if lib.file_path == expected_str {
+            continue;
+        }
+        if std::path::Path::new(&lib.file_path).exists() {
+            continue;
+        }
+        if let Some(parent) = expected.parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
+        settings_conn
+            .execute(
+                "UPDATE libraries SET file_path = ?1 WHERE uid = ?2",
+                params![expected_str, lib.uid],
+            )
+            .map_err(|e| e.to_string())?;
+        fixed += 1;
+    }
+
+    Ok(fixed)
+}
+
 pub fn ensure_default_library(profile_uid: &str) -> Result<String, String> {
     let settings_conn =
         open_tuned(get_settings_db_path(profile_uid)).map_err(|e| e.to_string())?;
 
     if let Some(existing) = get_default_library(&settings_conn).map_err(|e| e.to_string())? {
+        if let Err(e) = repair_library_paths(profile_uid) {
+            eprintln!("[library_manager] path repair failed: {e}");
+        }
         return Ok(existing.uid);
     }
 
@@ -1489,10 +1612,11 @@ pub fn open_source_conn_for_entity(
 // On failure the error is logged but does not propagate — the local write
 // already succeeded; the library is simply flagged as having unpushed changes.
 pub async fn push_library_checked(lib: &Library) -> Result<(), String> {
-    let sync_url = lib
-        .sync_url
-        .clone()
-        .ok_or_else(|| "This library has no remote location to push to".to_string())?;
+    let sync_url = normalize_sync_location(
+        lib.sync_url
+            .as_deref()
+            .ok_or_else(|| "This library has no remote location to push to".to_string())?,
+    );
 
     fn is_remote_http(url: &str) -> bool {
         url.starts_with("http://") || url.starts_with("https://")
@@ -1506,8 +1630,19 @@ pub async fn push_library_checked(lib: &Library) -> Result<(), String> {
         .unwrap_or(0);
 
     if !is_remote_http(&sync_url) {
-        std::fs::copy(&lib.file_path, &sync_url)
-            .map_err(|e| format!("Could not copy the library to {}: {}", sync_url, e))?;
+        if let Some(parent) = std::path::Path::new(&sync_url).parent() {
+            if !parent.as_os_str().is_empty() && !parent.exists() {
+                std::fs::create_dir_all(parent).ok();
+            }
+        }
+        let bytes = std::fs::read(&lib.file_path)
+            .map_err(|e| format!("Could not read the local library file: {}", e))?;
+        std::fs::write(&sync_url, bytes).map_err(|e| {
+            format!(
+                "Could not copy the library to {}: {}. Check that the share is reachable and you can write to it.",
+                sync_url, e
+            )
+        })?;
         let sidecar = format!(
             "{{\n\t\"last_modified\": {},\n\t\"write_requires_token\": false\n}}\n",
             now
@@ -1520,7 +1655,7 @@ pub async fn push_library_checked(lib: &Library) -> Result<(), String> {
         .write_token
         .clone()
         .filter(|t| !t.trim().is_empty())
-        .ok_or_else(|| "No write token is set for this library".to_string())?;
+        .ok_or_else(|| "No credentials are set for this library (token, or username:password)".to_string())?;
 
     let file_bytes = std::fs::read(&lib.file_path)
         .map_err(|e| format!("Could not read the local library file: {}", e))?;
@@ -1530,9 +1665,7 @@ pub async fn push_library_checked(lib: &Library) -> Result<(), String> {
         .build()
         .map_err(|e| e.to_string())?;
 
-    let resp = client
-        .put(&sync_url)
-        .header("Authorization", format!("Bearer {}", write_token))
+    let resp = with_auth(client.put(&sync_url), Some(&write_token))
         .header("Content-Type", "application/octet-stream")
         .body(file_bytes)
         .send()
@@ -1547,9 +1680,7 @@ pub async fn push_library_checked(lib: &Library) -> Result<(), String> {
         "{{\"last_modified\": {}, \"write_requires_token\": true}}",
         now
     );
-    let sidecar_resp = client
-        .put(format!("{}.json", sync_url))
-        .header("Authorization", format!("Bearer {}", write_token))
+    let sidecar_resp = with_auth(client.put(format!("{}.json", sync_url)), Some(&write_token))
         .header("Content-Type", "application/json")
         .body(sidecar)
         .send()
@@ -1580,7 +1711,11 @@ pub async fn try_push_library(lib: &Library) -> bool {
 
 // Fetches the sidecar JSON, compares last_modified to last_synced,
 // and downloads the db file if newer. Returns Ok(true) if a pull occurred.
-pub async fn try_pull_library(profile_uid: &str, lib_uid: &str) -> Result<bool, String> {
+pub async fn try_pull_library(
+    profile_uid: &str,
+    lib_uid: &str,
+    force: bool,
+) -> Result<bool, String> {
     let settings_conn =
         open_tuned(get_settings_db_path(profile_uid)).map_err(|e| e.to_string())?;
 
@@ -1589,7 +1724,7 @@ pub async fn try_pull_library(profile_uid: &str, lib_uid: &str) -> Result<bool, 
         .ok_or_else(|| format!("Library not found: {}", lib_uid))?;
 
     let sync_url = match &lib.sync_url {
-        Some(u) => u.clone(),
+        Some(u) => normalize_sync_location(u),
         None => return Ok(false),
     };
 
@@ -1606,17 +1741,34 @@ pub async fn try_pull_library(profile_uid: &str, lib_uid: &str) -> Result<bool, 
 
     if is_unc_or_local(&sync_url) {
         let sidecar_path = format!("{}.json", sync_url);
-        if let Ok(content) = std::fs::read_to_string(&sidecar_path) {
-            if let Ok(s) = serde_json::from_str::<RemoteSidecar>(&content) {
-                if s.last_modified <= lib.last_synced {
-                    return Ok(false);
-                }
-            }
+        let sidecar_ts: i64 = std::fs::read_to_string(&sidecar_path)
+            .ok()
+            .and_then(|c| serde_json::from_str::<RemoteSidecar>(&c).ok())
+            .map(|s| s.last_modified)
+            .unwrap_or(0);
+        let file_ts: i64 = std::fs::metadata(&sync_url)
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let newest_remote = sidecar_ts.max(file_ts);
+        if !force && newest_remote > 0 && newest_remote <= lib.last_synced {
+            return Ok(false);
         }
 
+        let bytes = std::fs::read(&sync_url)
+            .map_err(|e| format!("Could not read {}: {}", sync_url, e))?;
+        if !is_sqlite_bytes(&bytes) {
+            return Err("The file on the share is not a valid library database".to_string());
+        }
         remove_wal_files(&lib.file_path);
-        std::fs::copy(&sync_url, &lib.file_path)
-            .map_err(|e| format!("Could not copy database file: {}", e))?;
+        if let Some(parent) = std::path::Path::new(&lib.file_path).parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
+        std::fs::write(&lib.file_path, &bytes)
+            .map_err(|e| format!("Could not write the local library file: {}", e))?;
+        clear_readonly(&lib.file_path);
     } else {
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(15))
@@ -1624,25 +1776,41 @@ pub async fn try_pull_library(profile_uid: &str, lib_uid: &str) -> Result<bool, 
             .map_err(|e| e.to_string())?;
 
         let sidecar_url = format!("{}.json", sync_url);
-        if let Ok(resp) = client.get(&sidecar_url).send().await {
-            if let Ok(sidecar) = resp.json::<RemoteSidecar>().await {
-                if sidecar.last_modified <= lib.last_synced {
-                    return Ok(false);
+        if !force {
+            if let Ok(resp) = with_auth(client.get(&sidecar_url), lib.write_token.as_deref())
+                .send()
+                .await
+            {
+                if resp.status().is_success() {
+                    if let Ok(sidecar) = resp.json::<RemoteSidecar>().await {
+                        if sidecar.last_modified <= lib.last_synced {
+                            return Ok(false);
+                        }
+                    }
                 }
             }
         }
 
-        let bytes = client
-            .get(&sync_url)
+        let bytes = with_auth(client.get(&sync_url), lib.write_token.as_deref())
             .send()
             .await
-            .map_err(|e| e.to_string())?
+            .map_err(|e| format!("Could not reach the remote library: {}", e))?
+            .error_for_status()
+            .map_err(|e| format!("The remote library rejected the request: {}", e))?
             .bytes()
             .await
             .map_err(|e| e.to_string())?;
 
+        if !is_sqlite_bytes(&bytes) {
+            return Err("The remote file is not a valid library database".to_string());
+        }
+
         remove_wal_files(&lib.file_path);
+        if let Some(parent) = std::path::Path::new(&lib.file_path).parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
         std::fs::write(&lib.file_path, &bytes).map_err(|e| e.to_string())?;
+        clear_readonly(&lib.file_path);
     }
 
     crate::db::library_registry::update_library(
@@ -1678,21 +1846,24 @@ pub async fn check_write_permission(profile_uid: &str, lib_uid: &str) -> Result<
         url.starts_with("http://") || url.starts_with("https://")
     }
 
-    let has_permission = match &lib.sync_url {
+    let normalized_url = lib.sync_url.as_deref().map(normalize_sync_location);
+    let has_permission = match &normalized_url {
         None => true,
         Some(url) if !is_remote_http(url) => {
             std::fs::OpenOptions::new().write(true).open(url).is_ok()
+                || std::path::Path::new(url)
+                    .parent()
+                    .map(|p| p.is_dir())
+                    .unwrap_or(false)
         }
         Some(_) => {
-            let sync_url = lib.sync_url.as_deref().unwrap_or("");
+            let sync_url = normalized_url.as_deref().unwrap_or("");
             let token = lib.write_token.as_deref().unwrap_or("");
             let client = reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(10))
                 .build()
                 .map_err(|e| e.to_string())?;
-            match client
-                .head(sync_url)
-                .header("Authorization", format!("Bearer {}", token))
+            match with_auth(client.head(sync_url), Some(token))
                 .send()
                 .await
             {
@@ -1726,6 +1897,8 @@ pub async fn import_library(
     sync_url: &str,
     write_token: Option<&str>,
 ) -> Result<Library, String> {
+    let sync_url_owned = normalize_sync_location(sync_url);
+    let sync_url = sync_url_owned.as_str();
     fn is_unc_or_local(url: &str) -> bool {
         url.starts_with("\\\\")
             || url.starts_with("//")
@@ -1738,8 +1911,14 @@ pub async fn import_library(
     let mut last_synced = 0i64;
 
     if is_unc_or_local(sync_url) {
-        std::fs::copy(sync_url, &file_path)
+        let bytes = std::fs::read(sync_url)
+            .map_err(|e| format!("Could not read database file: {}", e))?;
+        if !is_sqlite_bytes(&bytes) {
+            return Err("That file is not a valid library database".to_string());
+        }
+        std::fs::write(&file_path, &bytes)
             .map_err(|e| format!("Could not copy database file: {}", e))?;
+        clear_readonly(&file_path.to_string_lossy());
 
         let sidecar_path = format!("{}.json", sync_url);
         if let Ok(content) = std::fs::read_to_string(&sidecar_path) {
@@ -1759,27 +1938,35 @@ pub async fn import_library(
             .map_err(|e| e.to_string())?;
 
         let sidecar_url = format!("{}.json", sync_url);
-        if let Ok(resp) = client.get(&sidecar_url).send().await {
-            if let Ok(s) = resp.json::<RemoteSidecar>().await {
-                if s.last_modified > 0 {
-                    last_synced = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_secs() as i64)
-                        .unwrap_or(0);
+        if let Ok(resp) = with_auth(client.get(&sidecar_url), write_token).send().await {
+            if resp.status().is_success() {
+                if let Ok(s) = resp.json::<RemoteSidecar>().await {
+                    if s.last_modified > 0 {
+                        last_synced = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_secs() as i64)
+                            .unwrap_or(0);
+                    }
                 }
             }
         }
 
-        let bytes = client
-            .get(sync_url)
+        let bytes = with_auth(client.get(sync_url), write_token)
             .send()
             .await
             .map_err(|e| format!("Could not download remote database: {}", e))?
+            .error_for_status()
+            .map_err(|e| format!("The server rejected the request (check the username and password): {}", e))?
             .bytes()
             .await
             .map_err(|e| e.to_string())?;
 
+        if !is_sqlite_bytes(&bytes) {
+            return Err("The downloaded file is not a valid library database".to_string());
+        }
+
         std::fs::write(&file_path, &bytes).map_err(|e| e.to_string())?;
+        clear_readonly(&file_path.to_string_lossy());
     }
 
     let settings_conn =

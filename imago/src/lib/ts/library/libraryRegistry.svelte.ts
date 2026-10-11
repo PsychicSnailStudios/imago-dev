@@ -61,8 +61,8 @@ export async function exportLibrary(libUid: string): Promise<void> {
 
 // ─── Sync / Push ─────────────────────────────────────────────────────────────
 
-export async function syncLibrary(libUid: string): Promise<boolean> {
-	const pulled = await invoke<boolean>("sync_library_cmd", { libUid });
+export async function syncLibrary(libUid: string, force = false): Promise<boolean> {
+	const pulled = await invoke<boolean>("sync_library_cmd", { libUid, force });
 	if (pulled) {
 		await loadLibrary();
 		emitLibraryChange("tracks:changed");

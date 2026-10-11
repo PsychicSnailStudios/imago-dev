@@ -48,6 +48,10 @@ fn is_remote_path(path: &str) -> bool {
 // lib_uid — which library db to write scanned tracks into
 // paths — the folders to watch
 pub fn start_watcher(app: AppHandle, profile_uid: String, lib_uid: String, paths: Vec<String>) {
+    let paths: Vec<String> = paths
+        .into_iter()
+        .filter(|p| !crate::webdav::is_http_url(p))
+        .collect();
     let generation_key = format!("{}:{}", profile_uid, lib_uid);
     let my_generation = bump_generation(&generation_key);
     std::thread::spawn(move || {
