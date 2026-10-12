@@ -272,16 +272,26 @@ fn path_key(path: &str) -> String {
 
 const NORMALISED_TRACK_PATH: &str = "LOWER(REPLACE(path, char(92), '/'))";
 
-fn delete_tracks_under_path(conn: &Connection, key: &str) -> rusqlite::Result<usize> {
+fn path_condition(key: &str) -> String {
     let column_expr = if key.starts_with("http://") || key.starts_with("https://") {
         "LOWER(COALESCE(remote_path, ''))"
     } else {
         NORMALISED_TRACK_PATH
     };
-    let cond = format!(
+    format!(
         "({n} = ?1 OR substr({n}, 1, length(?1) + 1) = ?1 || '/')",
         n = column_expr
-    );
+    )
+}
+
+fn track_uids_under_path(conn: &Connection, key: &str) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = conn.prepare(&format!("SELECT uid FROM tracks WHERE {}", path_condition(key)))?;
+    let rows = stmt.query_map(rusqlite::params![key], |row| row.get::<_, String>(0))?;
+    rows.collect()
+}
+
+fn delete_tracks_under_path(conn: &Connection, key: &str) -> rusqlite::Result<usize> {
+    let cond = path_condition(key);
     conn.execute(
         &format!(
             "DELETE FROM lyrics WHERE track_id IN (SELECT id FROM tracks WHERE {})",
@@ -302,27 +312,85 @@ fn delete_library_path_row(conn: &Connection, key: &str) -> rusqlite::Result<usi
     )
 }
 
-fn delete_orphans(conn: &Connection) -> rusqlite::Result<()> {
+fn table_uids(conn: &Connection, table: &str) -> rusqlite::Result<std::collections::HashSet<String>> {
+    let mut stmt = conn.prepare(&format!("SELECT uid FROM {}", table))?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    rows.collect()
+}
+
+fn delete_orphans(conn: &Connection) -> rusqlite::Result<(Vec<String>, Vec<String>)> {
+    let albums_before = table_uids(conn, "albums")?;
+    let artists_before = table_uids(conn, "artists")?;
+
     conn.execute(
         "DELETE FROM albums WHERE uid NOT IN (
-            SELECT DISTINCT json_extract(json_each.value, '$.uid')
-            FROM tracks, json_each(tracks.albums)
-            WHERE json_extract(json_each.value, '$.uid') IS NOT NULL
-            AND json_extract(json_each.value, '$.uid') != ''
+            SELECT CASE WHEN j.type = 'object' THEN json_extract(j.value, '$.uid') END
+            FROM tracks t, json_each(CASE WHEN json_valid(t.albums) THEN t.albums ELSE '[]' END) j
+            WHERE CASE WHEN j.type = 'object' THEN json_extract(j.value, '$.uid') END IS NOT NULL
         )",
         [],
     )?;
     conn.execute(
-        "DELETE FROM artists WHERE name NOT IN (
-            SELECT DISTINCT json_each.value
-            FROM tracks, json_each(tracks.artists)
-            WHERE tracks.artists IS NOT NULL AND tracks.artists != '[]'
-        ) AND name NOT IN (
-            SELECT DISTINCT album_artist FROM tracks WHERE album_artist IS NOT NULL
+        "DELETE FROM artists WHERE LOWER(name) NOT IN (
+            SELECT LOWER(j.value)
+            FROM tracks t, json_each(CASE WHEN json_valid(t.artists) THEN t.artists ELSE '[]' END) j
+            WHERE j.type = 'text'
+        ) AND LOWER(name) NOT IN (
+            SELECT LOWER(album_artist) FROM tracks
+            WHERE album_artist IS NOT NULL AND album_artist != ''
         )",
         [],
     )?;
-    Ok(())
+
+    let albums_after = table_uids(conn, "albums")?;
+    let artists_after = table_uids(conn, "artists")?;
+    Ok((
+        albums_before.difference(&albums_after).cloned().collect(),
+        artists_before.difference(&artists_after).cloned().collect(),
+    ))
+}
+
+struct Removed {
+    tracks: Vec<String>,
+    albums: Vec<String>,
+    artists: Vec<String>,
+}
+
+fn remove_tracks_and_orphans(
+    conn: &Connection,
+    key: &str,
+    remove_path_row: bool,
+) -> Result<Removed, String> {
+    conn.busy_timeout(std::time::Duration::from_secs(60)).ok();
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    if remove_path_row {
+        delete_library_path_row(conn, key).map_err(|e| e.to_string())?;
+    }
+    let tracks = track_uids_under_path(conn, key).map_err(|e| e.to_string())?;
+    delete_tracks_under_path(conn, key).map_err(|e| e.to_string())?;
+    let (albums, artists) = delete_orphans(conn).map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(Removed {
+        tracks,
+        albums,
+        artists,
+    })
+}
+
+fn merge_removed(profile_uid: &str, lib_uid: &str, removed: &Removed) -> Result<(), String> {
+    match library_manager::sync_entities(
+        profile_uid,
+        lib_uid,
+        &removed.tracks,
+        &removed.albums,
+        &removed.artists,
+    ) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            eprintln!("[paths] targeted merge failed, falling back to full update: {e}");
+            library_manager::incremental_update(profile_uid, &[lib_uid.to_string()])
+        }
+    }
 }
 
 #[tauri::command]
@@ -367,14 +435,9 @@ fn remove_path_blocking(app: &AppHandle, uid: &str, raw_path: &str) -> Result<()
 
     match target {
         Some(lib) => {
+            crate::scanner::cancel_scans_for_file(&lib.file_path);
             let lib_conn = library_manager::open_tuned(&lib.file_path)?;
-            {
-                let tx = lib_conn.unchecked_transaction().map_err(|e| e.to_string())?;
-                delete_library_path_row(&lib_conn, &key).map_err(|e| e.to_string())?;
-                delete_tracks_under_path(&lib_conn, &key).map_err(|e| e.to_string())?;
-                delete_orphans(&lib_conn).map_err(|e| e.to_string())?;
-                tx.commit().map_err(|e| e.to_string())?;
-            }
+            let removed = remove_tracks_and_orphans(&lib_conn, &key, true)?;
 
             let remaining: Vec<String> = get_paths_from_lib_db(&lib_conn)
                 .unwrap_or_default()
@@ -382,7 +445,7 @@ fn remove_path_blocking(app: &AppHandle, uid: &str, raw_path: &str) -> Result<()
                 .map(|p| p.path)
                 .collect();
 
-            library_manager::incremental_update(uid, &[lib.uid.clone()])?;
+            merge_removed(uid, &lib.uid, &removed)?;
 
             if remaining.is_empty() {
                 crate::watcher::stop_watcher(uid, &lib.uid);
@@ -442,6 +505,9 @@ pub fn rescan_path_cmd(
     }
 
     let lib = find_library_for_path(&uid, &key)?;
+    if mode == "clear" {
+        crate::scanner::cancel_scans_for_file(&lib.file_path);
+    }
     let scan_path = if crate::webdav::is_http_url(&path) {
         crate::webdav::encode_url_spaces(&path)
     } else {
@@ -467,20 +533,18 @@ pub fn rescan_path_cmd(
 
         let before_scan = snapshot_entity_uids(&uid);
         if mode == "clear" {
-            let cleared = lib_conn
-                .unchecked_transaction()
-                .and_then(|tx| {
-                    delete_tracks_under_path(&lib_conn, &key)?;
-                    delete_orphans(&lib_conn)?;
-                    tx.commit()
-                });
-            if let Err(e) = cleared {
-                eprintln!("[rescan_path] clear failed: {e}");
-                app.emit("scan:done", ()).ok();
-                return;
-            }
-            if let Err(e) = library_manager::incremental_update(&uid, &[lib.uid.clone()]) {
-                eprintln!("[rescan_path] merge after clear failed: {e}");
+            match remove_tracks_and_orphans(&lib_conn, &key, false) {
+                Ok(removed) => {
+                    if let Err(e) = merge_removed(&uid, &lib.uid, &removed) {
+                        eprintln!("[rescan_path] merge after clear failed: {e}");
+                    }
+                }
+                Err(e) => {
+                    eprintln!("[rescan_path] clear failed: {e}");
+                    app.emit("scan:error", format!("Clear failed: {e}")).ok();
+                    app.emit("scan:done", ()).ok();
+                    return;
+                }
             }
             app.emit("library:updated", ()).ok();
         }

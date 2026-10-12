@@ -424,6 +424,71 @@ pub fn propagate_remove(conn: &Connection, table: &str, field: &str, name: &str)
     Ok(())
 }
 
+// ─── Batch delete ─────────────────────────────────────────────────────────────
+
+pub fn delete_tags_batch(conn: &Connection, uids: &[String]) -> Result<Vec<Tag>> {
+	let tx = conn.unchecked_transaction()?;
+	let mut removed: Vec<Tag> = Vec::new();
+	for uid in uids {
+		if let Some(tag) = get_tag_by_uid(&tx, uid)? {
+			tx.execute("DELETE FROM tags WHERE uid = ?1", params![uid])?;
+			removed.push(tag);
+		}
+	}
+	tx.commit()?;
+	Ok(removed)
+}
+
+pub fn remove_names_everywhere(
+	conn: &Connection,
+	tags: &std::collections::HashSet<String>,
+	genres: &std::collections::HashSet<String>,
+) -> Result<()> {
+	for table in ["tracks", "albums", "artists"] {
+		if !tags.is_empty() {
+			remove_names_from_field(conn, table, "tags", tags)?;
+		}
+		if !genres.is_empty() {
+			remove_names_from_field(conn, table, "genres", genres)?;
+		}
+	}
+	Ok(())
+}
+
+fn remove_names_from_field(
+	conn: &Connection,
+	table: &str,
+	field: &str,
+	names: &std::collections::HashSet<String>,
+) -> Result<()> {
+	let sql = format!(
+		"SELECT rowid, {field} FROM {table} WHERE {field} IS NOT NULL AND {field} != '[]'"
+	);
+	let rows: Vec<(i64, String)> = {
+		let mut stmt = conn.prepare(&sql)?;
+		let collected: Vec<(i64, String)> = stmt
+			.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+			.filter_map(|r| r.ok())
+			.collect();
+		collected
+	};
+
+	let mut update = conn.prepare(&format!("UPDATE {table} SET {field} = ?1 WHERE rowid = ?2"))?;
+	for (rowid, json) in rows {
+		let mut arr: Vec<String> = match serde_json::from_str(&json) {
+			Ok(a) => a,
+			Err(_) => continue,
+		};
+		let before = arr.len();
+		arr.retain(|item| !names.contains(&item.to_lowercase()));
+		if arr.len() < before {
+			let new_json = serde_json::to_string(&arr).unwrap_or_else(|_| json.clone());
+			update.execute(params![new_json, rowid])?;
+		}
+	}
+	Ok(())
+}
+
 // ─── Extension trait for `optional()` on rusqlite ────────────────────────────
 
 trait OptionalExt<T> {

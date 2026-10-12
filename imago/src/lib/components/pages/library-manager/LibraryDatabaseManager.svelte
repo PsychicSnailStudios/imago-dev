@@ -24,7 +24,7 @@
 	import { invoke } from "@tauri-apps/api/core";
 	import { listen } from "@tauri-apps/api/event";
 	import { open } from "@tauri-apps/plugin-dialog";
-	import { onMount } from "svelte";
+	import { onMount, onDestroy } from "svelte";
 
 	import { Button, buttonVariants } from "$shadcn/button/index.js";
 	import * as Dialog from "$shadcn/dialog/index.js";
@@ -179,11 +179,16 @@
 
 	async function removePath(libUid: string, path: string) {
 		libStates[libUid].removingPath = path;
-		await invoke("remove_path", { path: path.trim() });
-		await loadPathsForLib(libUid);
-		await loadLibrary();
-		scanState.status = `Removed ${path}`;
-		libStates[libUid].removingPath = null;
+		try {
+			await invoke("remove_path", { path: path.trim() });
+			scanState.status = `Removed ${path}`;
+		} catch (e) {
+			toast.error("Could not remove folder", { description: String(e) });
+		} finally {
+			await loadPathsForLib(libUid);
+			await loadLibrary();
+			libStates[libUid].removingPath = null;
+		}
 	}
 
 	async function rescanPath(libUid: string, path: string) {
@@ -252,6 +257,16 @@
 	let checkingUid = $state<string | null>(null);
 	let rebuildingMerged = $state(false);
 
+	const unlisteners: (() => void)[] = [];
+
+	async function on(name: string, handler: (event: any) => void) {
+		unlisteners.push(await listen(name, handler));
+	}
+
+	onDestroy(() => {
+		for (const unlisten of unlisteners) unlisten();
+	});
+
 	onMount(async () => {
 		if (!libraryStore.loaded) await loadLibraryRegistry();
 
@@ -263,21 +278,21 @@
 			await loadPathsForLib(def.uid);
 		}
 
-		await listen("scan:progress", async (event: any) => {
+		await on("scan:progress", async (event: any) => {
 			scanState.loading = true;
 			scanState.progress = event.payload.scanned;
 			scanState.total = event.payload.total;
 			scanState.status = `Scanning… ${scanState.progress} / ${scanState.total}`;
 		});
 
-		await listen("scan:done", async () => {
+		await on("scan:done", async () => {
 			scanState.status = "Scan done.";
 			scanState.loading = false;
 			scanState.progress = 0;
 			scanState.total = 0;
 		});
 
-		await listen("library:updated", async () => {
+		await on("library:updated", async () => {
 			await loadLibrary();
 			if (lastScannedLibUid) {
 				await loadPathsForLib(lastScannedLibUid);
@@ -285,7 +300,7 @@
 			}
 		});
 
-		await listen("scan:error", (event: any) => {
+		await on("scan:error", (event: any) => {
 			const message = String(event.payload);
 			scanState.status = `Scan error: ${message}`;
 			scanState.loading = false;

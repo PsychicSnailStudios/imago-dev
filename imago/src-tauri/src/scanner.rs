@@ -1818,6 +1818,45 @@ pub fn default_library_conn_if_other(conn: &Connection) -> Option<Connection> {
 	Some(other)
 }
 
+fn scan_generations() -> &'static std::sync::Mutex<HashMap<String, u64>> {
+    static GENERATIONS: std::sync::OnceLock<std::sync::Mutex<HashMap<String, u64>>> =
+        std::sync::OnceLock::new();
+    GENERATIONS.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
+
+fn normalize_db_key(path: &str) -> String {
+    let canonical = std::fs::canonicalize(path)
+        .map(|c| c.to_string_lossy().to_string())
+        .unwrap_or_else(|_| path.to_string())
+        .replace('\\', "/")
+        .to_lowercase();
+    canonical.trim_start_matches("//?/").to_string()
+}
+
+fn main_db_key(conn: &Connection) -> String {
+    conn.query_row(
+        "SELECT file FROM pragma_database_list WHERE name = 'main'",
+        [],
+        |row| row.get::<_, String>(0),
+    )
+    .map(|p| normalize_db_key(&p))
+    .unwrap_or_default()
+}
+
+fn scan_generation_of(key: &str) -> u64 {
+    scan_generations()
+        .lock()
+        .map(|g| g.get(key).copied().unwrap_or(0))
+        .unwrap_or(0)
+}
+
+pub fn cancel_scans_for_file(file_path: &str) {
+    let key = normalize_db_key(file_path);
+    if let Ok(mut g) = scan_generations().lock() {
+        *g.entry(key).or_insert(0) += 1;
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ScanMode {
     Full,
@@ -1990,6 +2029,10 @@ fn scan_directory_impl(
     )
     .ok();
 
+    let scan_key = main_db_key(conn);
+    let scan_generation = scan_generation_of(&scan_key);
+    let mut cancelled = false;
+
     let priority_title = get_setting(conn, "filename_priority_title")
         .ok()
         .flatten()
@@ -2133,6 +2176,10 @@ fn scan_directory_impl(
     conn.execute_batch("BEGIN DEFERRED").ok();
 
     for item in all_files {
+        if scan_generation_of(&scan_key) != scan_generation {
+            cancelled = true;
+            break;
+        }
         let read_result = match &item {
             ScanItem::Local(path) => read_track_with_settings(
                 path,
@@ -2238,7 +2285,8 @@ fn scan_directory_impl(
             )
             .ok();
         }
-        if is_remote_scan && scanned % 25 == 0 {
+        let commit_every = if is_remote_scan { 25 } else { 100 };
+        if scanned % commit_every == 0 {
             conn.execute_batch("COMMIT").ok();
             conn.execute_batch("BEGIN DEFERRED").ok();
         }
@@ -2247,6 +2295,11 @@ fn scan_directory_impl(
     conn.execute_batch("COMMIT").ok();
     if is_remote_scan {
         std::fs::remove_dir_all(&temp_root).ok();
+    }
+
+    if cancelled {
+        app.emit("scan:done", ()).ok();
+        return;
     }
 
     let duplicates = crate::db::find_duplicates(conn).unwrap_or_default();

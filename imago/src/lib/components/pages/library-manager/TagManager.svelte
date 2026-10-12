@@ -70,9 +70,7 @@
 			description: `This will permanently delete all ${items.length} ${activeTab} and cannot be undone.`,
 		});
 		if (!confirmed) return;
-		for (const item of items) {
-			await tagStore.deleteTag(item.uid);
-		}
+		await tagStore.deleteTags(items.map((item) => item.uid));
 	}
 
   async function deleteAllGroups() {
@@ -82,9 +80,7 @@
       description: `This will permanently delete all ${visibleGroups.length} groups. The tags inside will not be deleted.`,
     });
     if (!confirmed) return;
-    for (const group of visibleGroups) {
-      await tagStore.deleteGroup(group.uid);
-    }
+    await tagStore.deleteGroups(visibleGroups.map((group) => group.uid));
   }
 
 	// ─── CSV Import ───────────────────────────────────────────────────────────────

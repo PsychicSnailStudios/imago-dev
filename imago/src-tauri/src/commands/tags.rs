@@ -84,6 +84,47 @@ pub async fn delete_tag_cmd(state: State<'_, AppState>, uid: String) -> Result<(
 }
 
 #[tauri::command]
+pub async fn delete_tags_cmd(state: State<'_, AppState>, uids: Vec<String>) -> Result<(), String> {
+    let profile_uid = state.get_uid();
+    library_manager::run_blocking(move || {
+        if uids.is_empty() {
+            return Ok(());
+        }
+        let conn = open_local_library_conn(&profile_uid);
+        let removed = tag_manager::delete_tags_batch(&conn, &uids).map_err(|e| e.to_string())?;
+        if removed.is_empty() {
+            return Ok(());
+        }
+
+        let mut tag_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut genre_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for tag in &removed {
+            if tag.kind == TagKind::Genre {
+                genre_names.insert(tag.name.to_lowercase());
+            } else {
+                tag_names.insert(tag.name.to_lowercase());
+            }
+        }
+
+        let mut touched: Vec<String> = Vec::new();
+        for lib in library_manager::writable_libraries(&profile_uid)? {
+            let lib_conn = library_manager::open_tuned(&lib.file_path)?;
+            let tx = lib_conn.unchecked_transaction().map_err(|e| e.to_string())?;
+            tag_manager::remove_names_everywhere(&lib_conn, &tag_names, &genre_names)
+                .map_err(|e| e.to_string())?;
+            tx.commit().map_err(|e| e.to_string())?;
+            touched.push(lib.uid.clone());
+        }
+
+        if !touched.is_empty() {
+            library_manager::incremental_update(&profile_uid, &touched)?;
+        }
+        Ok(())
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn update_tag_color_cmd(
     state: State<'_, AppState>,
     uid: String,

@@ -125,6 +125,12 @@ function createTagStore() {
 			await this.load();
 		},
 
+		async deleteTags(uids: string[]): Promise<void> {
+			if (uids.length === 0) return;
+			await invoke('delete_tags_cmd', { uids });
+			await this.load();
+		},
+
 		async updateTagColor(uid: string, color: string | null): Promise<void> {
 			await invoke('update_tag_color_cmd', { uid, color });
 			await this.load();
@@ -163,6 +169,12 @@ function createTagStore() {
 
 		async deleteGroup(uid: string): Promise<void> {
 			await invoke('delete_tag_group_cmd', { uid });
+			await this.load();
+		},
+
+		async deleteGroups(uids: string[]): Promise<void> {
+			if (uids.length === 0) return;
+			await Promise.all(uids.map((uid) => invoke('delete_tag_group_cmd', { uid })));
 			await this.load();
 		},
 
