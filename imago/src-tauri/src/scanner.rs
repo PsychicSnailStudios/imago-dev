@@ -198,7 +198,7 @@ fn extract_feat_artists(title: &str) -> Vec<String> {
 	};
 	let after = &title[end..];
 	let mut cut = after.len();
-	for stop in [")", "]", " - "] {
+	for stop in [")", "]", "(", "[", ";", " - ", " \u{2013} "] {
 		if let Some(pos) = after.find(stop) {
 			cut = cut.min(pos);
 		}

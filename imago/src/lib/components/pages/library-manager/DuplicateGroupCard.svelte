@@ -5,7 +5,7 @@
 	import ArtworkDisplay from "$lib/components/custom/ArtworkDisplay.svelte";
 	import ArtistsList from "$lib/components/custom/text-display/ArtistsList.svelte";
 	import { formatDuration } from "$ts/util/helpers";
-	import { keepTrack, deleteTrackFile, mergeRemoteLocal } from "$ts/library/libraryManager";
+	import { keepTrack, deleteTrackFile, mergeRemoteLocal, mergeTracksInto } from "$ts/library/libraryManager";
 	import type { DuplicateGroup } from "$ts/util/types";
 
 	let { group, onresolved }: { group: DuplicateGroup; onresolved: () => void } = $props();
@@ -28,6 +28,11 @@
 
 	async function handleMerge() {
 		await mergeRemoteLocal(group);
+		onresolved();
+	}
+
+	async function handleMergeInto(uid: string) {
+		await mergeTracksInto(uid, group);
 		onresolved();
 	}
 </script>
@@ -67,6 +72,18 @@
 				</div>
 
 				<div class="flex gap-2 shrink-0">
+					<Tooltip.Root>
+						<Tooltip.Trigger
+							class={buttonVariants({ variant: "outline", size: "icon" })}
+							onclick={() => handleMergeInto(track.uid)}
+						>
+							<GitMerge />
+						</Tooltip.Trigger>
+						<Tooltip.Content>
+							<p>Merge the others into this track. It keeps its ID, gains any missing paths and info, and playlists and play history are moved over.</p>
+						</Tooltip.Content>
+					</Tooltip.Root>
+
 					<Tooltip.Root>
 						<Tooltip.Trigger
 							class={buttonVariants({ variant: "outline", size: "icon" })}

@@ -1402,6 +1402,87 @@ pub fn repoint_album_in_tracks(
 	Ok(total)
 }
 
+pub fn repoint_track_in_albums(
+	profile_uid: &str,
+	from_uid: &str,
+	to_uid: &str,
+	to_name: &str,
+) -> Result<usize, String> {
+	let pattern = format!("%{}%", from_uid);
+	let mut total = 0usize;
+
+	for lib in writable_libraries(profile_uid)? {
+		let conn = open_tuned(&lib.file_path)?;
+
+		let rows: Vec<(String, String)> = {
+			let mut stmt = conn
+				.prepare("SELECT uid, tracks FROM albums WHERE tracks LIKE ?1")
+				.map_err(|e| e.to_string())?;
+			let collected: Vec<(String, String)> = stmt
+				.query_map(params![pattern], |row| Ok((row.get(0)?, row.get(1)?)))
+				.map_err(|e| e.to_string())?
+				.filter_map(|r| r.ok())
+				.collect();
+			collected
+		};
+
+		let mut changed: Vec<String> = Vec::new();
+		{
+			let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+			let mut update = conn
+				.prepare_cached("UPDATE albums SET tracks = ?1 WHERE uid = ?2")
+				.map_err(|e| e.to_string())?;
+
+			for (album_uid, tracks_json) in rows {
+				let mut list = match serde_json::from_str::<Vec<serde_json::Value>>(&tracks_json) {
+					Ok(l) => l,
+					Err(_) => continue,
+				};
+				let entry_uid = |e: &serde_json::Value| -> String {
+					e.get("uid")
+						.and_then(|u| u.as_str())
+						.unwrap_or("")
+						.to_string()
+				};
+				if !list.iter().any(|e| entry_uid(e) == from_uid) {
+					continue;
+				}
+
+				if list.iter().any(|e| entry_uid(e) == to_uid) {
+					list.retain(|e| entry_uid(e) != from_uid);
+				} else {
+					for entry in list.iter_mut() {
+						if entry_uid(entry) == from_uid {
+							if let Some(obj) = entry.as_object_mut() {
+								obj.insert(
+									"uid".to_string(),
+									serde_json::Value::String(to_uid.to_string()),
+								);
+								obj.insert(
+									"name".to_string(),
+									serde_json::Value::String(to_name.to_string()),
+								);
+							}
+						}
+					}
+				}
+
+				let out = serde_json::to_string(&list).map_err(|e| e.to_string())?;
+				update
+					.execute(params![out, album_uid])
+					.map_err(|e| e.to_string())?;
+				changed.push(album_uid);
+			}
+			drop(update);
+			tx.commit().map_err(|e| e.to_string())?;
+		}
+
+		total += changed.len();
+		sync_entities(profile_uid, &lib.uid, &[], &changed, &[])?;
+	}
+	Ok(total)
+}
+
 pub fn set_album_artist_for_album(
 	profile_uid: &str,
 	album_uid: &str,

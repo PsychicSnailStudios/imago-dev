@@ -400,6 +400,7 @@ pub fn run() {
 			commands::manage::delete_artists_cmd,
 			commands::manage::merge_artists_cmd,
 			commands::manage::merge_albums_cmd,
+			commands::manage::merge_tracks_cmd,
 			commands::settings::preview_filename_pattern_cmd,
 			// Enrichment
 			commands::enrichment::enrich_track,

@@ -312,83 +312,87 @@
 	<ScrollArea class="h-full min-h-0 min-w-0 pr-4">
 		<div class="flex flex-col gap-4 pb-4">
 			<Tabs.Root value="database">
-				<Tabs.List>
-					<Tabs.Trigger value="database">Database</Tabs.Trigger>
-					<Tabs.Trigger value="tags">Tags</Tabs.Trigger>
-					<Tabs.Trigger value="tracks">Tracks</Tabs.Trigger>
-					<Tabs.Trigger value="albums">Albums</Tabs.Trigger>
-					<Tabs.Trigger value="artists">Artists</Tabs.Trigger>
-					<Tabs.Trigger value="duplicates" onclick={loadDuplicates}>Duplicates</Tabs.Trigger>
-				</Tabs.List>
+				<div class="sticky top-0 z-10 bg-background pb-2">
+					<Tabs.List>
+						<Tabs.Trigger value="database">Database</Tabs.Trigger>
+						<Tabs.Trigger value="tags">Tags</Tabs.Trigger>
+						<Tabs.Trigger value="tracks">Tracks</Tabs.Trigger>
+						<Tabs.Trigger value="albums">Albums</Tabs.Trigger>
+						<Tabs.Trigger value="artists">Artists</Tabs.Trigger>
+						<Tabs.Trigger value="duplicates" onclick={loadDuplicates}>Duplicates</Tabs.Trigger>
+					</Tabs.List>
+				</div>
 
 				<!-- TRACKS -->
 				<Tabs.Content value="tracks">
 					<div class="flex flex-col gap-2 pt-2">
-						<div class="flex gap-2 justify-between items-center">
-							<span class="text-sm text-muted-foreground">
-								{filteredTracks.length} {filteredTracks.length === 1 ? "track" : "tracks"}
-							</span>
-							<SearchBar bind:search={trackSearch} searchCount={filteredTracks.length} />
-						</div>
-
-						<div class="flex gap-1 flex-wrap">
-							{#each (["all","ghosts","remote","local","noalbum"] as const) as mode}
-								<Button variant={trackFilterMode === mode ? "default" : "outline"} size="sm" onclick={() => trackFilterMode = mode}>
-									{FILTER_LABELS[mode]}
-								</Button>
-							{/each}
-						</div>
-
-						{#if anyTracksSelected}
+						<div class="sticky top-10 z-10 bg-background flex flex-col gap-2 pb-2">
 							<div class="flex gap-2 justify-between items-center">
-								<div class="flex gap-2 items-center">
-									<Checkbox
-										checked={allTracksSelected}
-										onCheckedChange={(v) => {
-											const next: Record<string, boolean> = {};
-											filteredTracks.forEach(t => next[t.uid] = !!v);
-											trackSelections = next;
-										}}
-									/>
-									<span class="text-xs text-muted-foreground">{selectedTrackUids.length} selected</span>
-								</div>
-								<div class="flex gap-1">
-									<Tooltip.Root>
-										<Tooltip.Trigger
-											class={buttonVariants({ variant: "destructive", size: "sm" })}
-											onclick={bulkRemoveTracks}
-										>
-											<Trash class="w-4 h-4 mr-1" /> Remove
-										</Tooltip.Trigger>
-										<Tooltip.Content><p>Remove selected from library</p></Tooltip.Content>
-									</Tooltip.Root>
-									<Tooltip.Root>
-										<Tooltip.Trigger
-											class={buttonVariants({ variant: "outline", size: "sm" })}
-											onclick={bulkEnrichTracks}
-											disabled={scanState.enriching}
-										>
-											{#if scanState.enriching}
-												<Loader2 class="w-4 h-4 mr-1 animate-spin" />
-											{:else}
-												<CloudDownload class="w-4 h-4 mr-1" />
-											{/if}
-											Enrich
-										</Tooltip.Trigger>
-										<Tooltip.Content><p>Fetch metadata for selected</p></Tooltip.Content>
-									</Tooltip.Root>
-									<Tooltip.Root>
-										<Tooltip.Trigger
-											class={buttonVariants({ variant: "outline", size: "sm" })}
-											onclick={() => (addToAlbumOpen = true)}
-										>
-											<FolderInput class="w-4 h-4 mr-1" /> Add to Album
-										</Tooltip.Trigger>
-										<Tooltip.Content><p>Add selected to an album</p></Tooltip.Content>
-									</Tooltip.Root>
-								</div>
+								<span class="text-sm text-muted-foreground">
+									{filteredTracks.length} {filteredTracks.length === 1 ? "track" : "tracks"}
+								</span>
+								<SearchBar bind:search={trackSearch} searchCount={filteredTracks.length} />
 							</div>
-						{/if}
+
+							<div class="flex gap-1 flex-wrap">
+								{#each (["all","ghosts","remote","local","noalbum"] as const) as mode}
+									<Button variant={trackFilterMode === mode ? "default" : "outline"} size="sm" onclick={() => trackFilterMode = mode}>
+										{FILTER_LABELS[mode]}
+									</Button>
+								{/each}
+							</div>
+
+							{#if anyTracksSelected}
+								<div class="flex gap-2 justify-between items-center">
+									<div class="flex gap-2 items-center">
+										<Checkbox
+											checked={allTracksSelected}
+											onCheckedChange={(v) => {
+												const next: Record<string, boolean> = {};
+												filteredTracks.forEach(t => next[t.uid] = !!v);
+												trackSelections = next;
+											}}
+										/>
+										<span class="text-xs text-muted-foreground">{selectedTrackUids.length} selected</span>
+									</div>
+									<div class="flex gap-1">
+										<Tooltip.Root>
+											<Tooltip.Trigger
+												class={buttonVariants({ variant: "destructive", size: "sm" })}
+												onclick={bulkRemoveTracks}
+											>
+												<Trash class="w-4 h-4 mr-1" /> Remove
+											</Tooltip.Trigger>
+											<Tooltip.Content><p>Remove selected from library</p></Tooltip.Content>
+										</Tooltip.Root>
+										<Tooltip.Root>
+											<Tooltip.Trigger
+												class={buttonVariants({ variant: "outline", size: "sm" })}
+												onclick={bulkEnrichTracks}
+												disabled={scanState.enriching}
+											>
+												{#if scanState.enriching}
+													<Loader2 class="w-4 h-4 mr-1 animate-spin" />
+												{:else}
+													<CloudDownload class="w-4 h-4 mr-1" />
+												{/if}
+												Enrich
+											</Tooltip.Trigger>
+											<Tooltip.Content><p>Fetch metadata for selected</p></Tooltip.Content>
+										</Tooltip.Root>
+										<Tooltip.Root>
+											<Tooltip.Trigger
+												class={buttonVariants({ variant: "outline", size: "sm" })}
+												onclick={() => (addToAlbumOpen = true)}
+											>
+												<FolderInput class="w-4 h-4 mr-1" /> Add to Album
+											</Tooltip.Trigger>
+											<Tooltip.Content><p>Add selected to an album</p></Tooltip.Content>
+										</Tooltip.Root>
+									</div>
+								</div>
+							{/if}
+						</div>
 
 						{@render trackPager()}
 
@@ -411,64 +415,66 @@
 				<!-- ALBUMS -->
 				<Tabs.Content value="albums">
 					<div class="flex flex-col gap-2 pt-2">
-						<div class="flex gap-2 justify-between items-center">
-							<span class="text-sm text-muted-foreground">
-								{filteredAlbums.length} {filteredAlbums.length === 1 ? "album" : "albums"}
-							</span>
-							<SearchBar bind:search={albumSearch} searchCount={filteredAlbums.length} />
+						<div class="sticky top-10 z-10 bg-background flex flex-col gap-2 pb-2">
+							<div class="flex gap-2 justify-between items-center">
+								<span class="text-sm text-muted-foreground">
+									{filteredAlbums.length} {filteredAlbums.length === 1 ? "album" : "albums"}
+								</span>
+								<SearchBar bind:search={albumSearch} searchCount={filteredAlbums.length} />
+							</div>
+							{#if anyAlbumsSelected}
+								<div class="flex gap-2 justify-between items-center">
+									<div class="flex gap-2 items-center">
+										<Checkbox
+											checked={allAlbumsSelected}
+											onCheckedChange={(v) => {
+												const next: Record<string, boolean> = {};
+												filteredAlbums.forEach(a => next[a.uid] = !!v);
+												albumSelections = next;
+											}}
+										/>
+										<span class="text-xs text-muted-foreground">{selectedAlbumUids.length} selected</span>
+									</div>
+									<div class="flex gap-1">
+										<Tooltip.Root>
+											<Tooltip.Trigger
+												class={buttonVariants({ variant: "destructive", size: "sm" })}
+												onclick={bulkRemoveAlbums}
+											>
+												<Trash class="w-4 h-4 mr-1" /> Remove
+											</Tooltip.Trigger>
+											<Tooltip.Content><p>Remove selected albums</p></Tooltip.Content>
+										</Tooltip.Root>
+										<Tooltip.Root>
+											<Tooltip.Trigger
+												class={buttonVariants({ variant: "outline", size: "sm" })}
+												onclick={() => openMerge("albums")}
+												disabled={selectedAlbumUids.length < 2}
+											>
+												<Merge class="w-4 h-4 mr-1" /> Merge
+											</Tooltip.Trigger>
+											<Tooltip.Content><p>Merge selected albums into one</p></Tooltip.Content>
+										</Tooltip.Root>
+										<Tooltip.Root>
+											<Tooltip.Trigger
+												class={buttonVariants({ variant: "outline", size: "sm" })}
+												onclick={bulkEnrichAlbums}
+												disabled={scanState.enriching}
+											>
+												{#if scanState.enriching}
+													<Loader2 class="w-4 h-4 mr-1 animate-spin" />
+												{:else}
+													<CloudDownload class="w-4 h-4 mr-1" />
+												{/if}
+												Enrich
+											</Tooltip.Trigger>
+											<Tooltip.Content><p>Fetch metadata for selected</p></Tooltip.Content>
+										</Tooltip.Root>
+									</div>
+								</div>
+							{/if}
 						</div>
 
-						{#if anyAlbumsSelected}
-							<div class="flex gap-2 justify-between items-center">
-								<div class="flex gap-2 items-center">
-									<Checkbox
-										checked={allAlbumsSelected}
-										onCheckedChange={(v) => {
-											const next: Record<string, boolean> = {};
-											filteredAlbums.forEach(a => next[a.uid] = !!v);
-											albumSelections = next;
-										}}
-									/>
-									<span class="text-xs text-muted-foreground">{selectedAlbumUids.length} selected</span>
-								</div>
-								<div class="flex gap-1">
-									<Tooltip.Root>
-										<Tooltip.Trigger
-											class={buttonVariants({ variant: "destructive", size: "sm" })}
-											onclick={bulkRemoveAlbums}
-										>
-											<Trash class="w-4 h-4 mr-1" /> Remove
-										</Tooltip.Trigger>
-										<Tooltip.Content><p>Remove selected albums</p></Tooltip.Content>
-									</Tooltip.Root>
-									<Tooltip.Root>
-										<Tooltip.Trigger
-											class={buttonVariants({ variant: "outline", size: "sm" })}
-											onclick={() => openMerge("albums")}
-											disabled={selectedAlbumUids.length < 2}
-										>
-											<Merge class="w-4 h-4 mr-1" /> Merge
-										</Tooltip.Trigger>
-										<Tooltip.Content><p>Merge selected albums into one</p></Tooltip.Content>
-									</Tooltip.Root>
-									<Tooltip.Root>
-										<Tooltip.Trigger
-											class={buttonVariants({ variant: "outline", size: "sm" })}
-											onclick={bulkEnrichAlbums}
-											disabled={scanState.enriching}
-										>
-											{#if scanState.enriching}
-												<Loader2 class="w-4 h-4 mr-1 animate-spin" />
-											{:else}
-												<CloudDownload class="w-4 h-4 mr-1" />
-											{/if}
-											Enrich
-										</Tooltip.Trigger>
-										<Tooltip.Content><p>Fetch metadata for selected</p></Tooltip.Content>
-									</Tooltip.Root>
-								</div>
-							</div>
-						{/if}
 
 						<div class="flex flex-col gap-2">
 							{#each filteredAlbums as album, i (album.uid)}
@@ -486,64 +492,66 @@
 				<!-- ARTISTS -->
 				<Tabs.Content value="artists">
 					<div class="flex flex-col gap-2 pt-2">
-						<div class="flex gap-2 justify-between items-center">
-							<span class="text-sm text-muted-foreground">
-								{filteredArtists.length} {filteredArtists.length === 1 ? "artist" : "artists"}
-							</span>
-							<SearchBar bind:search={artistSearch} searchCount={filteredArtists.length} />
-						</div>
-
-						{#if anyArtistsSelected}
+						<div class="sticky top-10 z-10 bg-background flex flex-col gap-2 pb-2">
 							<div class="flex gap-2 justify-between items-center">
-								<div class="flex gap-2 items-center">
-									<Checkbox
-										checked={allArtistsSelected}
-										onCheckedChange={(v) => {
-											const next: Record<string, boolean> = {};
-											filteredArtists.forEach(a => next[a.uid] = !!v);
-											artistSelections = next;
-										}}
-									/>
-									<span class="text-xs text-muted-foreground">{selectedArtistUids.length} selected</span>
-								</div>
-								<div class="flex gap-1">
-									<Tooltip.Root>
-										<Tooltip.Trigger
-											class={buttonVariants({ variant: "destructive", size: "sm" })}
-											onclick={bulkRemoveArtists}
-										>
-											<Trash class="w-4 h-4 mr-1" /> Remove
-										</Tooltip.Trigger>
-										<Tooltip.Content><p>Remove selected artists</p></Tooltip.Content>
-									</Tooltip.Root>
-									<Tooltip.Root>
-										<Tooltip.Trigger
-											class={buttonVariants({ variant: "outline", size: "sm" })}
-											onclick={() => openMerge("artists")}
-											disabled={selectedArtistUids.length < 2}
-										>
-											<Merge class="w-4 h-4 mr-1" /> Merge
-										</Tooltip.Trigger>
-										<Tooltip.Content><p>Merge selected artists into one</p></Tooltip.Content>
-									</Tooltip.Root>
-									<Tooltip.Root>
-										<Tooltip.Trigger
-											class={buttonVariants({ variant: "outline", size: "sm" })}
-											onclick={bulkEnrichArtists}
-											disabled={scanState.enriching}
-										>
-											{#if scanState.enriching}
-												<Loader2 class="w-4 h-4 mr-1 animate-spin" />
-											{:else}
-												<CloudDownload class="w-4 h-4 mr-1" />
-											{/if}
-											Enrich
-										</Tooltip.Trigger>
-										<Tooltip.Content><p>Fetch metadata for selected</p></Tooltip.Content>
-									</Tooltip.Root>
-								</div>
+								<span class="text-sm text-muted-foreground">
+									{filteredArtists.length} {filteredArtists.length === 1 ? "artist" : "artists"}
+								</span>
+								<SearchBar bind:search={artistSearch} searchCount={filteredArtists.length} />
 							</div>
-						{/if}
+	
+							{#if anyArtistsSelected}
+								<div class="flex gap-2 justify-between items-center">
+									<div class="flex gap-2 items-center">
+										<Checkbox
+											checked={allArtistsSelected}
+											onCheckedChange={(v) => {
+												const next: Record<string, boolean> = {};
+												filteredArtists.forEach(a => next[a.uid] = !!v);
+												artistSelections = next;
+											}}
+										/>
+										<span class="text-xs text-muted-foreground">{selectedArtistUids.length} selected</span>
+									</div>
+									<div class="flex gap-1">
+										<Tooltip.Root>
+											<Tooltip.Trigger
+												class={buttonVariants({ variant: "destructive", size: "sm" })}
+												onclick={bulkRemoveArtists}
+											>
+												<Trash class="w-4 h-4 mr-1" /> Remove
+											</Tooltip.Trigger>
+											<Tooltip.Content><p>Remove selected artists</p></Tooltip.Content>
+										</Tooltip.Root>
+										<Tooltip.Root>
+											<Tooltip.Trigger
+												class={buttonVariants({ variant: "outline", size: "sm" })}
+												onclick={() => openMerge("artists")}
+												disabled={selectedArtistUids.length < 2}
+											>
+												<Merge class="w-4 h-4 mr-1" /> Merge
+											</Tooltip.Trigger>
+											<Tooltip.Content><p>Merge selected artists into one</p></Tooltip.Content>
+										</Tooltip.Root>
+										<Tooltip.Root>
+											<Tooltip.Trigger
+												class={buttonVariants({ variant: "outline", size: "sm" })}
+												onclick={bulkEnrichArtists}
+												disabled={scanState.enriching}
+											>
+												{#if scanState.enriching}
+													<Loader2 class="w-4 h-4 mr-1 animate-spin" />
+												{:else}
+													<CloudDownload class="w-4 h-4 mr-1" />
+												{/if}
+												Enrich
+											</Tooltip.Trigger>
+											<Tooltip.Content><p>Fetch metadata for selected</p></Tooltip.Content>
+										</Tooltip.Root>
+									</div>
+								</div>
+							{/if}
+						</div>
 
 						<div class="flex flex-col gap-2">
 							{#each filteredArtists as artist, i (artist.uid)}

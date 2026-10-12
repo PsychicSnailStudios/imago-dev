@@ -631,3 +631,343 @@ pub async fn merge_albums_cmd(
 	})
 	.await
 }
+
+fn text_missing(v: &Option<String>) -> bool {
+	v.as_deref()
+		.map(|s| s.trim().is_empty() || s.trim() == "[]")
+		.unwrap_or(true)
+}
+
+fn union_strings(a: &Option<String>, b: &Option<String>) -> Option<String> {
+	let mut out: Vec<String> = a
+		.as_deref()
+		.and_then(|s| serde_json::from_str::<Vec<String>>(s).ok())
+		.unwrap_or_default();
+	if let Some(extra) = b
+		.as_deref()
+		.and_then(|s| serde_json::from_str::<Vec<String>>(s).ok())
+	{
+		for item in extra {
+			if !out.iter().any(|e| e.to_lowercase() == item.to_lowercase()) {
+				out.push(item);
+			}
+		}
+	}
+	if out.is_empty() {
+		None
+	} else {
+		serde_json::to_string(&out).ok()
+	}
+}
+
+fn union_album_entries(a: &Option<String>, b: &Option<String>) -> Option<String> {
+	let mut out: Vec<serde_json::Value> = a
+		.as_deref()
+		.and_then(|s| serde_json::from_str::<Vec<serde_json::Value>>(s).ok())
+		.unwrap_or_default();
+	if let Some(extra) = b
+		.as_deref()
+		.and_then(|s| serde_json::from_str::<Vec<serde_json::Value>>(s).ok())
+	{
+		for item in extra {
+			let uid = entry_uid(&item).to_string();
+			let name = item
+				.get("name")
+				.and_then(|n| n.as_str())
+				.unwrap_or("")
+				.to_lowercase();
+			let exists = out.iter().any(|e| {
+				let eu = entry_uid(e);
+				if !uid.is_empty() && !eu.is_empty() {
+					eu == uid
+				} else {
+					e.get("name")
+						.and_then(|n| n.as_str())
+						.map(|n| n.to_lowercase() == name)
+						.unwrap_or(false)
+				}
+			});
+			if !exists {
+				out.push(item);
+			}
+		}
+	}
+	if out.is_empty() {
+		None
+	} else {
+		serde_json::to_string(&out).ok()
+	}
+}
+
+fn repoint_track_in_playlists(
+	profile_uid: &str,
+	from_uid: &str,
+	to_uid: &str,
+	to_name: &str,
+) -> Result<(), String> {
+	let path = crate::profiles::get_playlists_db_path(profile_uid);
+	if !path.exists() {
+		return Ok(());
+	}
+	let conn = library_manager::open_tuned(&path)?;
+	let pattern = format!("%{}%", from_uid);
+
+	let rows: Vec<(String, String)> = {
+		let mut stmt = conn
+			.prepare("SELECT uid, tracks FROM playlists WHERE tracks LIKE ?1")
+			.map_err(|e| e.to_string())?;
+		let collected: Vec<(String, String)> = stmt
+			.query_map(params![pattern], |r| Ok((r.get(0)?, r.get(1)?)))
+			.map_err(|e| e.to_string())?
+			.filter_map(|r| r.ok())
+			.collect();
+		collected
+	};
+
+	let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+	for (playlist_uid, json) in rows {
+		let Some(list) = parse_list(&json) else { continue };
+		if !list.iter().any(|e| entry_uid(e) == from_uid) {
+			continue;
+		}
+
+		let mut seen_target = false;
+		let mut rebuilt: Vec<serde_json::Value> = Vec::new();
+		for mut entry in list {
+			let mut uid = entry_uid(&entry).to_string();
+			if uid == from_uid {
+				if let Some(obj) = entry.as_object_mut() {
+					obj.insert("uid".to_string(), serde_json::Value::String(to_uid.to_string()));
+					obj.insert("name".to_string(), serde_json::Value::String(to_name.to_string()));
+				}
+				uid = to_uid.to_string();
+			}
+			if uid == to_uid {
+				if seen_target {
+					continue;
+				}
+				seen_target = true;
+			}
+			rebuilt.push(entry);
+		}
+		for (i, entry) in rebuilt.iter_mut().enumerate() {
+			if let Some(obj) = entry.as_object_mut() {
+				obj.insert("order".to_string(), serde_json::json!(i + 1));
+			}
+		}
+
+		let out = serde_json::to_string(&rebuilt).map_err(|e| e.to_string())?;
+		conn.execute(
+			"UPDATE playlists SET tracks = ?1 WHERE uid = ?2",
+			params![out, playlist_uid],
+		)
+		.map_err(|e| e.to_string())?;
+	}
+	tx.commit().map_err(|e| e.to_string())?;
+	Ok(())
+}
+
+fn merge_tracks_blocking(
+	profile_uid: &str,
+	keep_uid: &str,
+	drop_uids: &[String],
+) -> Result<(), String> {
+	if drop_uids.is_empty() || drop_uids.iter().any(|u| u == keep_uid) {
+		return Err("Choose one track to keep and at least one other track to merge".to_string());
+	}
+
+	let merged = open_merged_conn(profile_uid);
+	let keep = crate::db::get_track_by_uid(&merged, keep_uid)
+		.map_err(|e| e.to_string())?
+		.ok_or_else(|| "The track to keep was not found".to_string())?;
+	let mut drops = Vec::new();
+	for uid in drop_uids {
+		if let Some(t) = crate::db::get_track_by_uid(&merged, uid).map_err(|e| e.to_string())? {
+			drops.push(t);
+		}
+	}
+	drop(merged);
+
+	let (keep_conn, keep_lib) =
+		library_manager::open_source_conn_for_entity(profile_uid, keep_uid, "tracks")
+			.map_err(|e| e.to_string())?;
+	ensure_writable(&keep_lib, "The track to keep")?;
+	for uid in drop_uids {
+		let (_, lib) = library_manager::open_source_conn_for_entity(profile_uid, uid, "tracks")
+			.map_err(|e| e.to_string())?;
+		ensure_writable(&lib, "A merged track")?;
+	}
+
+	let keep_had_location = !keep.path.trim().is_empty()
+		|| keep
+			.remote_path
+			.as_deref()
+			.map(|r| !r.trim().is_empty())
+			.unwrap_or(false);
+	let mut gained_location = false;
+
+	let fill_text = |col: &str, value: &Option<String>| -> Result<bool, String> {
+		let Some(v) = value.as_deref().filter(|v| !v.trim().is_empty() && v.trim() != "[]") else {
+			return Ok(false);
+		};
+		let changed = keep_conn
+			.execute(
+				&format!(
+					"UPDATE tracks SET {c} = ?1 WHERE uid = ?2 AND ({c} IS NULL OR TRIM({c}) = '' OR TRIM({c}) = '[]')",
+					c = col
+				),
+				params![v, keep_uid],
+			)
+			.map_err(|e| e.to_string())?;
+		Ok(changed > 0)
+	};
+	let fill_number = |col: &str, value: Option<f64>| -> Result<(), String> {
+		let Some(v) = value.filter(|v| *v != 0.0) else {
+			return Ok(());
+		};
+		keep_conn
+			.execute(
+				&format!(
+					"UPDATE tracks SET {c} = ?1 WHERE uid = ?2 AND ({c} IS NULL OR {c} = 0)",
+					c = col
+				),
+				params![v, keep_uid],
+			)
+			.map_err(|e| e.to_string())?;
+		Ok(())
+	};
+
+	let mut tags = keep.tags.clone();
+	let mut genres = keep.genres.clone();
+	let mut albums = keep.albums.clone();
+
+	for d in &drops {
+		let path_value = if d.path.trim().is_empty() { None } else { Some(d.path.clone()) };
+		if fill_text("path", &path_value)? {
+			gained_location = true;
+			keep_conn
+				.execute(
+					"UPDATE tracks SET last_modified = ?1 WHERE uid = ?2",
+					params![d.last_modified, keep_uid],
+				)
+				.map_err(|e| e.to_string())?;
+		}
+		if fill_text("remote_path", &d.remote_path)? {
+			gained_location = true;
+		}
+		for (col, value) in [
+			("remote_data", &d.remote_data),
+			("format", &d.format),
+			("year", &d.year),
+			("key", &d.key),
+			("credits", &d.credits),
+			("label", &d.label),
+			("album_artist", &d.album_artist),
+			("artists", &d.artists),
+			("user_options", &d.user_options),
+		] {
+			fill_text(col, value)?;
+		}
+		fill_number("bitrate", d.bitrate.map(|v| v as f64))?;
+		fill_number("duration_ms", d.duration_ms.map(|v| v as f64))?;
+		fill_number("bpm", d.bpm.map(|v| v as f64))?;
+		fill_number("rating", d.rating.map(|v| v as f64))?;
+
+		tags = union_strings(&tags, &d.tags);
+		genres = union_strings(&genres, &d.genres);
+		albums = union_album_entries(&albums, &d.albums);
+	}
+
+	keep_conn
+		.execute(
+			"UPDATE tracks SET tags = COALESCE(?1, tags), genres = COALESCE(?2, genres), albums = COALESCE(?3, albums) WHERE uid = ?4",
+			params![tags, genres, albums, keep_uid],
+		)
+		.map_err(|e| e.to_string())?;
+
+	let keep_has_art = keep.artwork_thumb.as_deref().map(|t| !t.is_empty()).unwrap_or(false)
+		|| keep.artwork_path.as_deref().map(|p| !p.is_empty()).unwrap_or(false);
+	if !keep_has_art {
+		if let Some(donor) = drops.iter().find(|d| {
+			d.artwork_thumb.as_deref().map(|t| !t.is_empty()).unwrap_or(false)
+				|| d.artwork_path.as_deref().map(|p| !p.is_empty()).unwrap_or(false)
+		}) {
+			copy_image_columns(
+				profile_uid,
+				"tracks",
+				&["artwork_blob", "artwork_path", "artwork_thumb"],
+				&donor.uid,
+				&keep_conn,
+				keep_uid,
+			)?;
+		}
+	}
+
+	if gained_location && !keep_had_location {
+		let current: Option<String> = keep_conn
+			.query_row(
+				"SELECT track_data FROM tracks WHERE uid = ?1",
+				params![keep_uid],
+				|r| r.get(0),
+			)
+			.ok()
+			.flatten();
+		if let Some(mut value) = current
+			.as_deref()
+			.and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+		{
+			if let Some(obj) = value.as_object_mut() {
+				if obj.contains_key("is_ghost") {
+					obj.insert("is_ghost".to_string(), serde_json::Value::Bool(false));
+					if let Ok(out) = serde_json::to_string(&value) {
+						keep_conn
+							.execute(
+								"UPDATE tracks SET track_data = ?1 WHERE uid = ?2",
+								params![out, keep_uid],
+							)
+							.map_err(|e| e.to_string())?;
+					}
+				}
+			}
+		}
+	}
+
+	library_manager::sync_track(profile_uid, &keep_lib.uid, keep_uid)?;
+
+	let keep_title = keep.title.clone().unwrap_or_default();
+	for uid in drop_uids {
+		library_manager::repoint_track_in_albums(profile_uid, uid, keep_uid, &keep_title)?;
+		repoint_track_in_playlists(profile_uid, uid, keep_uid, &keep_title)?;
+	}
+
+	{
+		let analytics = crate::open_analytics_conn(profile_uid).map_err(|e| e.to_string())?;
+		for uid in drop_uids {
+			analytics
+				.execute(
+					"UPDATE scrobbles SET track_uid = ?1 WHERE track_uid = ?2",
+					params![keep_uid, uid],
+				)
+				.map_err(|e| e.to_string())?;
+		}
+	}
+
+	let settings = open_settings_conn(profile_uid);
+	for uid in drop_uids {
+		crate::db::settings_manager::add_uid_remap(&settings, uid, keep_uid, "track")
+			.map_err(|e| e.to_string())?;
+	}
+
+	finish_delete(delete_entities(profile_uid, Kind::Tracks, drop_uids, false)?)
+}
+
+#[tauri::command]
+pub async fn merge_tracks_cmd(
+	state: State<'_, AppState>,
+	keep_uid: String,
+	drop_uids: Vec<String>,
+) -> Result<(), String> {
+	let profile_uid = state.get_uid();
+	library_manager::run_blocking(move || merge_tracks_blocking(&profile_uid, &keep_uid, &drop_uids))
+		.await
+}

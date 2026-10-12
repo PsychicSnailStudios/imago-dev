@@ -2,7 +2,7 @@ use crate::db::settings_manager::LibraryPath;
 use crate::library_manager;
 use crate::profiles::{get_lib_db_path, get_library_db_path, get_settings_db_path};
 use crate::state::AppState;
-use crate::{open_local_library_conn, open_settings_conn};
+use crate::{open_local_library_conn, open_merged_conn, open_settings_conn};
 use rusqlite::Connection;
 use tauri::Manager;
 use tauri::{AppHandle, Emitter, State};
@@ -54,7 +54,44 @@ fn get_lib_uid_for_path(settings_conn: &Connection, path: &str) -> Option<String
         .flatten()
 }
 
-fn spawn_post_scan_tasks(app: AppHandle, profile_uid: String) {
+#[derive(Default, Clone)]
+pub struct EntitySnapshot {
+    pub tracks: std::collections::HashSet<String>,
+    pub albums: std::collections::HashSet<String>,
+    pub artists: std::collections::HashSet<String>,
+}
+
+fn snapshot_entity_uids(profile_uid: &str) -> EntitySnapshot {
+    let conn = open_merged_conn(profile_uid);
+    let collect = |table: &str| -> std::collections::HashSet<String> {
+        conn.prepare(&format!("SELECT uid FROM {}", table))
+            .ok()
+            .map(|mut stmt| {
+                let set: std::collections::HashSet<String> = stmt
+                    .query_map([], |r| r.get::<_, String>(0))
+                    .map(|rows| rows.filter_map(|r| r.ok()).collect())
+                    .unwrap_or_default();
+                set
+            })
+            .unwrap_or_default()
+    };
+    EntitySnapshot {
+        tracks: collect("tracks"),
+        albums: collect("albums"),
+        artists: collect("artists"),
+    }
+}
+
+fn entities_added_since(profile_uid: &str, before: &EntitySnapshot) -> EntitySnapshot {
+    let after = snapshot_entity_uids(profile_uid);
+    EntitySnapshot {
+        tracks: after.tracks.difference(&before.tracks).cloned().collect(),
+        albums: after.albums.difference(&before.albums).cloned().collect(),
+        artists: after.artists.difference(&before.artists).cloned().collect(),
+    }
+}
+
+fn spawn_post_scan_tasks(app: AppHandle, profile_uid: String, added: EntitySnapshot) {
 	{
 		let relink_app = app.clone();
 		let relink_uid = profile_uid.clone();
@@ -87,17 +124,29 @@ fn spawn_post_scan_tasks(app: AppHandle, profile_uid: String) {
 	}
 
 	tauri::async_runtime::spawn(async move {
-		let state = app.state::<AppState>();
-		if auto_tracks {
-			let _ = crate::commands::enrichment::enrich_all(app.clone(), state.clone()).await;
+		if auto_tracks && !added.tracks.is_empty() {
+			let _ = crate::commands::enrichment::enrich_all_for(
+				app.clone(),
+				profile_uid.clone(),
+				Some(added.tracks.clone()),
+			)
+			.await;
 		}
-		if auto_albums {
-			let _ =
-				crate::commands::enrichment::enrich_all_albums(app.clone(), state.clone()).await;
+		if auto_albums && !added.albums.is_empty() {
+			let _ = crate::commands::enrichment::enrich_all_albums_for(
+				app.clone(),
+				profile_uid.clone(),
+				Some(added.albums.clone()),
+			)
+			.await;
 		}
-		if auto_artists {
-			let _ =
-				crate::commands::enrichment::enrich_all_artists(app.clone(), state.clone()).await;
+		if auto_artists && !added.artists.is_empty() {
+			let _ = crate::commands::enrichment::enrich_all_artists_for(
+				app.clone(),
+				profile_uid.clone(),
+				Some(added.artists.clone()),
+			)
+			.await;
 		}
 		if auto_lyrics {
 			crate::commands::lyrics::fetch_missing_lyrics(app.clone(), profile_uid.clone()).await;
@@ -186,6 +235,7 @@ pub fn add_path(
                 settings_path.to_string_lossy().replace('\'', "''")
             ))
             .ok();
+        let before_scan = snapshot_entity_uids(&uid_clone);
         crate::scanner::scan_directory_with_creds(
             &lib_conn,
             &path_clone,
@@ -196,7 +246,8 @@ pub fn add_path(
 
         let _ = library_manager::incremental_update(&uid_clone, &[lib_uid_clone.clone()]);
 
-		spawn_post_scan_tasks(app_clone.clone(), uid_clone.clone());
+        let added = entities_added_since(&uid_clone, &before_scan);
+		spawn_post_scan_tasks(app_clone.clone(), uid_clone.clone(), added);
 
         let all_paths: Vec<String> = {
             if let Ok(lc) = Connection::open(&lib_file_path_clone) {
@@ -414,6 +465,7 @@ pub fn rescan_path_cmd(
             ))
             .ok();
 
+        let before_scan = snapshot_entity_uids(&uid);
         if mode == "clear" {
             let cleared = lib_conn
                 .unchecked_transaction()
@@ -445,7 +497,8 @@ pub fn rescan_path_cmd(
             eprintln!("[rescan_path] merge failed: {e}");
         }
         app.emit("library:updated", ()).ok();
-        spawn_post_scan_tasks(app.clone(), uid.clone());
+        let added = entities_added_since(&uid, &before_scan);
+        spawn_post_scan_tasks(app.clone(), uid.clone(), added);
 
         let remaining: Vec<String> = get_paths_from_lib_db(&lib_conn)
             .unwrap_or_default()
@@ -500,6 +553,7 @@ pub fn rescan(app: AppHandle, state: State<AppState>) -> Result<(), String> {
     let all_libs = crate::db::library_registry::get_all_libraries(&settings_conn)
         .map_err(|e| e.to_string())?;
 
+	let before_scan = snapshot_entity_uids(&uid);
 	let mut handles = Vec::new();
 
     for lib in all_libs {
@@ -562,7 +616,8 @@ pub fn rescan(app: AppHandle, state: State<AppState>) -> Result<(), String> {
 		for handle in handles {
 			let _ = handle.join();
 		}
-		spawn_post_scan_tasks(app_done, uid_done);
+		let added = entities_added_since(&uid_done, &before_scan);
+		spawn_post_scan_tasks(app_done, uid_done, added);
 	});
 
     Ok(())

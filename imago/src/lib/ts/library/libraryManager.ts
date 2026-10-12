@@ -169,14 +169,20 @@ export async function mergeKeepFirst(group: DuplicateGroup): Promise<void> {
 	await keepTrack(group.tracks[0].uid, group);
 }
 
-export async function mergeRemoteLocal(group: DuplicateGroup): Promise<void> {
-	const local = group.tracks.find((t) => t.path && t.path.length > 0);
-	const remote = group.tracks.find((t) => (!t.path || t.path.length === 0) && t.remote_path && t.remote_path.length > 0);
-	if (!local || !remote) return;
+export async function mergeTracksInto(keepUid: string, group: DuplicateGroup): Promise<void> {
+	const dropUids = group.tracks.filter((t) => t.uid !== keepUid).map((t) => t.uid);
+	if (dropUids.length === 0) return;
 	try {
-		await invoke("merge_remote_local_tracks", { keepUid: local.uid, dropUid: remote.uid });
+		await invoke("merge_tracks_cmd", { keepUid, dropUids });
+		toast.success("Tracks merged");
 	} catch (e) {
 		toast.error(`Merge failed: ${e}`);
 	}
 	await reloadLibrary("all");
+}
+
+export async function mergeRemoteLocal(group: DuplicateGroup): Promise<void> {
+	const local = group.tracks.find((t) => t.path && t.path.length > 0);
+	if (!local) return;
+	await mergeTracksInto(local.uid, group);
 }

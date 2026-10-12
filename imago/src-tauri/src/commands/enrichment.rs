@@ -122,7 +122,14 @@ pub async fn enrich_track(
 
 #[tauri::command]
 pub async fn enrich_all(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-	let profile_uid = state.get_uid();
+	enrich_all_for(app, state.get_uid(), None).await
+}
+
+pub async fn enrich_all_for(
+	app: AppHandle,
+	profile_uid: String,
+	only: Option<std::collections::HashSet<String>>,
+) -> Result<(), String> {
 	let settings_conn = open_settings_conn(&profile_uid);
 	let settings = load_enrich_settings(&settings_conn);
 
@@ -132,6 +139,7 @@ pub async fn enrich_all(app: AppHandle, state: State<'_, AppState>) -> Result<()
 			.unwrap_or_default()
 			.into_iter()
 			.filter(|t| t.id.is_some())
+			.filter(|t| only.as_ref().map_or(true, |f| f.contains(&t.uid)))
 			.filter_map(|t| enrichment::TrackWants::for_track(&t).map(|w| (t, w)))
 			.collect()
 	};
@@ -330,7 +338,14 @@ pub async fn enrich_album(
 
 #[tauri::command]
 pub async fn enrich_all_albums(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-	let profile_uid = state.get_uid();
+	enrich_all_albums_for(app, state.get_uid(), None).await
+}
+
+pub async fn enrich_all_albums_for(
+	app: AppHandle,
+	profile_uid: String,
+	only: Option<std::collections::HashSet<String>>,
+) -> Result<(), String> {
 	let settings_conn = open_settings_conn(&profile_uid);
 	let settings = load_enrich_settings(&settings_conn);
 
@@ -339,6 +354,7 @@ pub async fn enrich_all_albums(app: AppHandle, state: State<'_, AppState>) -> Re
 		db::get_all_albums(&conn)
 			.map_err(|e| e.to_string())?
 			.into_iter()
+			.filter(|a| only.as_ref().map_or(true, |f| f.contains(&a.uid)))
 			.filter_map(|a| enrichment::AlbumWants::for_album(&a).map(|w| (a, w)))
 			.collect()
 	};
@@ -491,7 +507,14 @@ pub async fn enrich_artist(
 
 #[tauri::command]
 pub async fn enrich_all_artists(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-	let profile_uid = state.get_uid();
+	enrich_all_artists_for(app, state.get_uid(), None).await
+}
+
+pub async fn enrich_all_artists_for(
+	app: AppHandle,
+	profile_uid: String,
+	only: Option<std::collections::HashSet<String>>,
+) -> Result<(), String> {
 	let settings_conn = open_settings_conn(&profile_uid);
 	let settings = load_enrich_settings(&settings_conn);
 
@@ -500,6 +523,7 @@ pub async fn enrich_all_artists(app: AppHandle, state: State<'_, AppState>) -> R
 		db::get_all_artists(&conn)
 			.map_err(|e| e.to_string())?
 			.into_iter()
+			.filter(|a| only.as_ref().map_or(true, |f| f.contains(&a.uid)))
 			.filter_map(|a| enrichment::ArtistWants::for_artist(&a).map(|w| (a, w)))
 			.collect()
 	};
