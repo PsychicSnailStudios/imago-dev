@@ -223,7 +223,7 @@
 		try {
 			// Fetch all tracks once up front for matching
 			const allTracks = await getTracks();
-			const playlistTrackEntries: { uid: string; name: string; order: number }[] = [];
+			const playlistTrackEntries: { uid: string; name: string; artist: string | null; album: string | null; order: number }[] = [];
 
 			for (let i = 0; i < parsedTracks.length; i++) {
 				const parsed = parsedTracks[i];
@@ -239,7 +239,7 @@
 					);
 					createdCount++;
 				}
-				playlistTrackEntries.push({ uid, name: parsed.title, order: i + 1 });
+				playlistTrackEntries.push({ uid, name: parsed.title, artist: parsed.artist || null, album: parsed.album || null, order: i + 1 });
 			}
 
 			await createPlaylist(playlistName.trim(), profileState.active?.name ?? null, folder, playlistTrackEntries);

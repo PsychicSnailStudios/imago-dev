@@ -8,6 +8,8 @@ export type TrackAlbumEntry = {
 export type PlaylistTrackEntry = {
 	uid: string;
 	name: string;
+	artist?: string | null;
+	album?: string | null;
 	order: number;
 };
 
@@ -108,7 +110,7 @@ export type Playlist = {
 	artwork_thumb: string | null;
 };
 
-export type TrackEntry = { uid: string; name: string; order: number }
+export type TrackEntry = { uid: string; name: string; artist?: string | null; album?: string | null; order: number }
 
 export type SpotifyPlaylistSummary = {
 	id: string;

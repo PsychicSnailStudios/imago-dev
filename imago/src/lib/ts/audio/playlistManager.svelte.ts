@@ -2,7 +2,19 @@ import { getPlaylist, getTrack, reloadLibrary } from "$ts/store/library.svelte";
 import { invoke } from "@tauri-apps/api/core";
 import { showWarning } from "$ts/ui/dialogManager.svelte";
 
+import { parseArtists, parseAlbumEntries } from "$ts/util/parsers";
+
 import type { Playlist, Track, TrackEntry } from "$ts/util/types";
+
+export function entryFromTrack(track: Track | null | undefined, uid: string, order: number): TrackEntry {
+	return {
+		uid,
+		name: track?.title ?? "Unknown Title",
+		artist: track ? (parseArtists(track.artists)[0] ?? null) : null,
+		album: track ? (parseAlbumEntries(track.albums)[0]?.name ?? null) : null,
+		order,
+	}
+}
 
 export function parseTracks(raw: unknown): TrackEntry[] {
 	if (!raw) return []
@@ -16,7 +28,7 @@ export async function addTrackToPlaylist(playlist: Playlist, track: Track) {
 	if (current.some((t) => t.uid === track.uid)) return
 
 	const maxOrder = current.reduce((m, t) => Math.max(m, t.order ?? 0), 0)
-	const updated = [...current, { uid: track.uid!, name: track.title ?? "Unknown Title", order: maxOrder + 1 }]
+	const updated = [...current, entryFromTrack(track, track.uid!, maxOrder + 1)]
 
 	await invoke("update_playlist_entry", {
 		uid: String(playlist.uid),
@@ -40,7 +52,7 @@ export async function addTracksToPlaylist(playlistUid: string, trackUids: string
 	const newEntries: TrackEntry[] = await Promise.all(toAdd.map(async (uid) => {
 		const track = await getTrack(uid)
 		maxOrder += 1
-		return { uid, name: track?.title ?? "Unknown Title", order: maxOrder }
+		return entryFromTrack(track, uid, maxOrder)
 	}))
 
 	await invoke("update_playlist_entry", {

@@ -17,6 +17,7 @@
 	import { openEditModal } from "$ts/ui/editModal.svelte";
 	import { totalDuration } from "$ts/util/helpers";
 	import { queueTracksByObject } from "$ts/audio/audioManager.svelte";
+	import { isGhostTrack } from "$ts/audio/audioHelper";
 	import { dragState, endDrag } from "$ts/store/drag.svelte";
 	import { createPersistedViewState } from "$ts/store/session.svelte";
 	import { fetchArtworkColor } from "$ts/library/artworkLoader";
@@ -43,7 +44,7 @@
 		if (!uid) { playlist = null; tracks = []; return; }
 		playlist = await getPlaylist(uid);
 		if (!playlist) { tracks = []; return; }
-		tracks = await getTrackArrayFromUID(playlist.uid, view.sort);
+		tracks = await getTrackArrayFromUID(playlist.uid, view.sort, true);
 	}
 
 	async function loadFilteredTracks() {
@@ -63,7 +64,7 @@
 	// Reload when sort changes
 	$effect(() => {
 		view.sort;
-		if (playlist) getTrackArrayFromUID(playlist.uid, view.sort).then(t => tracks = t);
+		if (playlist) getTrackArrayFromUID(playlist.uid, view.sort, true).then(t => tracks = t);
 	});
 
 	// Re-run search when query or visibility changes
@@ -159,9 +160,9 @@
 			<div class="flex gap-2 justify-between items-center flex-wrap p-2 rounded-md"
 				  style="background: {color};">
 				<div>
-					<Button variant="default" disabled={allGhosts} onclick={() => queueTracksByObject(tracks, true, false, playlist.uid)}>{ tracks.length === 1 ? "Play" : "Play All"}</Button>
+					<Button variant="default" disabled={allGhosts} onclick={() => queueTracksByObject(tracks.filter(t => !isGhostTrack(t)), true, false, playlist.uid)}>{ tracks.length === 1 ? "Play" : "Play All"}</Button>
 					{#if tracks.length > 1}
-					<Button variant="outline" disabled={allGhosts} onclick={() => queueTracksByObject(tracks, true, true, playlist.uid)}>Shuffle</Button>
+					<Button variant="outline" disabled={allGhosts} onclick={() => queueTracksByObject(tracks.filter(t => !isGhostTrack(t)), true, true, playlist.uid)}>Shuffle</Button>
 					{/if}
 				</div>
 				

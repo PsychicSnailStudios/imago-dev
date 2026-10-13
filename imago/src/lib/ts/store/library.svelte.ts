@@ -171,10 +171,17 @@ export async function searchArtists(query: string): Promise<Artist[]> {
 
 const parsedTracksCache = new Map<string, { raw: string; entries: Array<{ uid: string; track_number?: number; order?: number }> }>();
 
-export async function getTrackArrayFromUID(uid: string, sort?: SortState): Promise<Track[]> {
+export async function getTrackArrayFromUID(uid: string, sort?: SortState, includeMissing = false): Promise<Track[]> {
 	const type = parseUidType(uid);
 	const isAlbum = type === "album";
 	if (!isAlbum && type !== "playlist") return [];
+
+	if (!isAlbum && includeMissing) {
+		const resolved = await invoke<Track[]>("get_playlist_tracks", { uid });
+		const orderMap = new Map<string, number>();
+		resolved.forEach((track, i) => orderMap.set(track.uid, i + 1));
+		return sortTracks(resolved, sort ?? new SortState("number", "asc"), undefined, orderMap);
+	}
 
 	const container = isAlbum
 		? await getAlbum(uid)

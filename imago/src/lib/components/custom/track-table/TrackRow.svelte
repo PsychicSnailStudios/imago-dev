@@ -84,6 +84,7 @@
 
 	function handleRowDblClick(e: MouseEvent) {
 		if ((e.target as HTMLElement).closest("button")) return;
+		if (isGhosted) return;
 		playTrackByUid(track.uid, sourceUid);
 	}
 
@@ -124,11 +125,11 @@
 
 <div
 	role="row"
-	class="grid items-center content-center px-3 border-b cursor-pointer select-none transition-colors {isSelected ? 'bg-primary/15 hover:bg-primary/20' : 'hover:bg-muted/50'} {isGhosted ? 'opacity-50 pointer-events-none cursor-not-allowed' : ''}"
+	class="grid items-center content-center px-3 border-b cursor-pointer select-none transition-colors {isSelected ? 'bg-primary/15 hover:bg-primary/20' : 'hover:bg-muted/50'} {isGhosted ? (playlistUid ? 'opacity-50' : 'opacity-50 pointer-events-none cursor-not-allowed') : ''}"
 	style="grid-template-columns: {gridTemplate}; height: {compact ? '28px' : '56px'};"
 	onclick={handleRowClick}
 	ondblclick={handleRowDblClick}
-	onkeydown={(e) => { if (e.key === 'Enter') playTrackByUid(track.uid, sourceUid); }}
+	onkeydown={(e) => { if (e.key === 'Enter' && !isGhosted) playTrackByUid(track.uid, sourceUid); }}
 	draggable="true"
 	ondragstart={handleDragStart}
 	ondragend={handleDragEnd}

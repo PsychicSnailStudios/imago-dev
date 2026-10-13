@@ -605,6 +605,8 @@ pub async fn spotify_import_playlist(
 		playlist_entries.push(PlaylistTrackEntry {
 			uid,
 			name: sp_track.name.clone(),
+			artist: sp_track.artists.first().map(|a| a.name.clone()),
+			album: sp_track.album.as_ref().map(|a| a.name.clone()),
 			order: (order + 1) as u32,
 		});
 	}

@@ -5,6 +5,10 @@ use serde::{Deserialize, Serialize};
 pub struct PlaylistTrackEntry {
     pub uid: String,
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artist: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub album: Option<String>,
     pub order: u32,
 }
 
