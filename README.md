@@ -30,6 +30,18 @@ Build for production:
 
 ``bun tauri build``
 
+## Versioning
+
+```
+bun run bump 1.2.0     # set an exact version
+bun run bump patch     # 1.2.0 → 1.2.1
+bun run bump minor     # 1.2.1 → 1.3.0
+bun run bump major     # 1.3.0 → 2.0.0
+
+bun run bump 1.2.0 --git # edit files, commit, and tag v1.2.0
+bun run bump minor --git
+```
+
 ## Adding Components
 
 bun x shadcn-svelte@latest add [component-name]
