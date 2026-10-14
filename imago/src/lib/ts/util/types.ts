@@ -45,6 +45,8 @@ export type Track = {
 	bitrate: number | null;
 	remote_data: string | null;
 	track_data: string | null;
+	extra_paths?: string | null;
+	extra_remote_paths?: string | null;
 	artwork_thumb: string | null;
 	source_lib_uid: string | null;
 	is_local_override: boolean | null;

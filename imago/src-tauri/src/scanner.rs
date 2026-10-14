@@ -740,62 +740,80 @@ fn parse_folder_path(path: &Path) -> FilenameMetadata {
 pub fn find_remote_local_counterpart(conn: &Connection, incoming: &Track) -> Option<String> {
     let incoming_title = incoming.title.as_deref()?.to_lowercase();
 
-    let incoming_artist_owned: Option<String> = incoming
+    let incoming_artist: Option<String> = incoming
         .album_artist
         .as_ref()
         .map(|s| s.to_lowercase())
         .or_else(|| crate::db::first_artist_name(&incoming.artists).map(|s| s.to_lowercase()));
 
     let incoming_duration = incoming.duration_ms.unwrap_or(0);
-    let incoming_is_remote = incoming
-        .remote_path
-        .as_deref()
-        .map(|rp| !rp.is_empty())
-        .unwrap_or(false)
-        || incoming.path.is_empty();
+
+    let (incoming_locals, incoming_remotes) = crate::db::track_paths::all_entries(incoming);
+    let incoming_keys: std::collections::HashSet<String> = incoming_locals
+        .iter()
+        .chain(incoming_remotes.iter())
+        .map(|e| crate::db::track_paths::path_key(&e.path))
+        .collect();
 
     let mut stmt = conn
         .prepare(
-            "SELECT uid, path, remote_path, duration_ms, album_artist, artists
-				FROM tracks
-				WHERE LOWER(TRIM(title)) = LOWER(TRIM(?1))",
+            "SELECT uid, path, remote_path, extra_paths, extra_remote_paths, duration_ms,
+\t\t\t\talbum_artist, artists, albums
+\t\t\t\tFROM tracks
+\t\t\t\tWHERE LOWER(TRIM(title)) = LOWER(TRIM(?1))",
         )
         .ok()?;
 
-    let rows: Vec<(
+    type Row = (
         String,
+        Option<String>,
+        Option<String>,
         Option<String>,
         Option<String>,
         Option<i64>,
         Option<String>,
         Option<String>,
-    )> = {
-        stmt.query_map(rusqlite::params![incoming_title], |row| {
+        Option<String>,
+    );
+
+    let rows: Vec<Row> = stmt
+        .query_map(rusqlite::params![incoming_title], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, Option<String>>(1)?,
                 row.get::<_, Option<String>>(2)?,
-                row.get::<_, Option<i64>>(3)?,
+                row.get::<_, Option<String>>(3)?,
                 row.get::<_, Option<String>>(4)?,
-                row.get::<_, Option<String>>(5)?,
+                row.get::<_, Option<i64>>(5)?,
+                row.get::<_, Option<String>>(6)?,
+                row.get::<_, Option<String>>(7)?,
+                row.get::<_, Option<String>>(8)?,
             ))
         })
         .ok()?
         .filter_map(|r| r.ok())
-        .collect()
-    };
+        .collect();
 
-    for (uid, path, remote_path, duration_ms, album_artist_json, artists_json) in rows {
-        let existing_is_remote = remote_path
-            .as_deref()
-            .map(|rp| !rp.is_empty())
-            .unwrap_or(false)
-            || path.as_deref().map(|p| p.is_empty()).unwrap_or(true);
-
-        if existing_is_remote == incoming_is_remote {
-            continue;
+    for (_, path, remote_path, extra_paths, extra_remote_paths, ..) in &rows {
+        let mut owned: Vec<String> = Vec::new();
+        if let Some(p) = path.as_deref().filter(|p| !p.is_empty()) {
+            owned.push(crate::db::track_paths::path_key(p));
         }
+        if let Some(p) = remote_path.as_deref().filter(|p| !p.is_empty()) {
+            owned.push(crate::db::track_paths::path_key(p));
+        }
+        for entry in crate::db::track_paths::parse_entries(extra_paths)
+            .into_iter()
+            .chain(crate::db::track_paths::parse_entries(extra_remote_paths))
+        {
+            owned.push(crate::db::track_paths::path_key(&entry.path));
+        }
+        if owned.iter().any(|k| incoming_keys.contains(k)) {
+            return None;
+        }
+    }
 
+    for (uid, _, _, _, _, duration_ms, album_artist_json, artists_json, albums_json) in rows {
         let dur = duration_ms.unwrap_or(0);
         if (dur - incoming_duration).abs() > 1000 {
             continue;
@@ -806,58 +824,59 @@ pub fn find_remote_local_counterpart(conn: &Connection, incoming: &Track) -> Opt
             .map(|s| s.to_lowercase())
             .or_else(|| crate::db::first_artist_name(&artists_json).map(|s| s.to_lowercase()));
 
-        if existing_artist == incoming_artist_owned {
-            return Some(uid);
+        if existing_artist != incoming_artist {
+            continue;
         }
+
+        if !crate::db::track_paths::same_album(&incoming.albums, &albums_json) {
+            continue;
+        }
+
+        return Some(uid);
     }
 
     None
 }
 
-pub fn merge_paths_into_existing(conn: &Connection, existing_uid: &str, incoming: &Track) {
-    let row: Option<(Option<String>, Option<String>)> = conn
-        .query_row(
-            "SELECT path, remote_path FROM tracks WHERE uid = ?1",
-            rusqlite::params![existing_uid],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .ok();
-
-    let (existing_path, existing_remote) = match row {
-        Some(r) => r,
-        None => return,
-    };
-
-    let need_path = existing_path
-        .as_deref()
-        .map(|p| p.is_empty())
-        .unwrap_or(true);
-    let need_remote = existing_remote
-        .as_deref()
-        .map(|rp| rp.is_empty())
-        .unwrap_or(true);
-
-    if need_path {
-        if !incoming.path.is_empty() {
-            conn.execute(
-                "UPDATE tracks SET path = ?1 WHERE uid = ?2",
-                rusqlite::params![incoming.path, existing_uid],
-            )
-            .ok();
-        }
-    }
-
-    if need_remote {
-        if let Some(ref rp) = incoming.remote_path {
-            if !rp.is_empty() {
-                conn.execute(
-                    "UPDATE tracks SET remote_path = ?1 WHERE uid = ?2",
-                    rusqlite::params![rp, existing_uid],
-                )
-                .ok();
+fn build_extra_owner(conn: &Connection) -> std::collections::HashMap<String, String> {
+    let mut owners = std::collections::HashMap::new();
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT uid, extra_paths, extra_remote_paths FROM tracks
+         WHERE COALESCE(extra_paths, '') != '' OR COALESCE(extra_remote_paths, '') != ''",
+    ) {
+        if let Ok(rows) = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, Option<String>>(1)?,
+                r.get::<_, Option<String>>(2)?,
+            ))
+        }) {
+            for (uid, locals, remotes) in rows.flatten() {
+                for entry in crate::db::track_paths::parse_entries(&locals)
+                    .into_iter()
+                    .chain(crate::db::track_paths::parse_entries(&remotes))
+                {
+                    owners.insert(entry.path.replace('\\', "/").to_lowercase(), uid.clone());
+                }
             }
         }
     }
+    owners
+}
+
+fn refresh_extra_owner(
+    conn: &Connection,
+    uid: &str,
+    owners: &mut std::collections::HashMap<String, String>,
+) {
+    owners.retain(|_, owner| owner != uid);
+    for key in crate::db::track_paths::extra_path_keys(conn, uid) {
+        owners.insert(key, uid.to_string());
+    }
+}
+
+pub fn merge_paths_into_existing(conn: &Connection, existing_uid: &str, incoming: &Track) {
+    let _ = crate::db::track_paths::merge_track_into(conn, existing_uid, incoming);
 
     let _ = conn.execute(
         "UPDATE tracks SET
@@ -872,9 +891,7 @@ pub fn merge_paths_into_existing(conn: &Connection, existing_uid: &str, incoming
 			key          = COALESCE(key,          ?10),
 			label        = COALESCE(label,        ?11),
 			artwork_blob = COALESCE(artwork_blob, ?12),
-			artwork_path = COALESCE(artwork_path, ?13),
-			format       = COALESCE(format,       ?14),
-			bitrate      = COALESCE(bitrate,      ?15)
+			artwork_path = COALESCE(artwork_path, ?13)
 		WHERE uid = ?1",
         rusqlite::params![
             existing_uid,
@@ -890,8 +907,6 @@ pub fn merge_paths_into_existing(conn: &Connection, existing_uid: &str, incoming
             incoming.label,
             incoming.artwork_blob,
             incoming.artwork_path,
-            incoming.format,
-            incoming.bitrate,
         ],
     );
 }
@@ -1258,6 +1273,8 @@ pub fn read_track_with_settings(
         }))
         .ok(),
         date_added: None,
+        extra_paths: None,
+        extra_remote_paths: None,
     })
 }
 
@@ -1993,16 +2010,28 @@ fn read_remote_item(
 fn known_track_stamps(conn: &Connection) -> std::collections::HashMap<String, i64> {
     let mut known = std::collections::HashMap::new();
     if let Ok(mut stmt) = conn.prepare(
-        "SELECT COALESCE(path, ''), last_modified, COALESCE(remote_path, '') FROM tracks",
+        "SELECT COALESCE(path, ''), last_modified, COALESCE(remote_path, ''),
+                extra_paths, extra_remote_paths FROM tracks",
     ) {
         if let Ok(rows) = stmt.query_map([], |r| {
             Ok((
                 r.get::<_, String>(0)?,
                 r.get::<_, i64>(1)?,
                 r.get::<_, String>(2)?,
+                r.get::<_, Option<String>>(3)?,
+                r.get::<_, Option<String>>(4)?,
             ))
         }) {
-            for (path, stamp, remote) in rows.flatten() {
+            for (path, stamp, remote, extra_locals, extra_remotes) in rows.flatten() {
+                for entry in crate::db::track_paths::parse_entries(&extra_locals)
+                    .into_iter()
+                    .chain(crate::db::track_paths::parse_entries(&extra_remotes))
+                {
+                    known.insert(
+                        entry.path.replace('\\', "/").to_lowercase(),
+                        entry.last_modified.unwrap_or(-1),
+                    );
+                }
                 if !path.is_empty() {
                     known.insert(path.replace('\\', "/").to_lowercase(), stamp);
                 }
@@ -2169,6 +2198,7 @@ fn scan_directory_impl(
     let mut album_cache: AlbumCache = build_album_cache(conn);
 
     let mut artist_cache: ArtistCache = build_artist_cache(conn);
+    let mut extra_owner = build_extra_owner(conn);
 
     let tag_conn_owned: Option<Connection> = default_library_conn_if_other(conn);
     let tag_conn: &Connection = tag_conn_owned.as_ref().unwrap_or(conn);
@@ -2209,8 +2239,23 @@ fn scan_directory_impl(
             ),
         };
         if let Some(track) = read_result {
-            if let Some(existing_uid) = find_remote_local_counterpart(conn, &track) {
+            let incoming_key = if !track.path.is_empty() {
+                track.path.replace('\\', "/").to_lowercase()
+            } else {
+                track.remote_path.clone().unwrap_or_default().to_lowercase()
+            };
+            let handled = if let Some(owner) = extra_owner.get(&incoming_key).cloned() {
+                let _ = crate::db::track_paths::refresh_extra_entry(conn, &owner, &track);
+                refresh_extra_owner(conn, &owner, &mut extra_owner);
+                true
+            } else if let Some(existing_uid) = find_remote_local_counterpart(conn, &track) {
                 merge_paths_into_existing(conn, &existing_uid, &track);
+                refresh_extra_owner(conn, &existing_uid, &mut extra_owner);
+                true
+            } else {
+                false
+            };
+            if handled {
                 scanned += 1;
                 if scanned % 25 == 0 || scanned == total {
                     app.emit(

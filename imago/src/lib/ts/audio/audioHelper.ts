@@ -43,6 +43,18 @@ export function parseTrackData(json: string | null): TrackData {
 	try { return json ? JSON.parse(json) : {}; } catch { return {}; }
 }
 
+export function parseExtraPaths(json: string | null | undefined): string[] {
+	try {
+		const list = json ? JSON.parse(json) : [];
+		if (!Array.isArray(list)) return [];
+		return list
+			.map((entry) => (typeof entry === "string" ? entry : entry?.path))
+			.filter((p): p is string => typeof p === "string" && p.length > 0);
+	} catch {
+		return [];
+	}
+}
+
 export function isGhostTrack(track: Track): boolean {
 	const data = parseTrackData(track.track_data);
 	if (data.is_ghost === true) return true;

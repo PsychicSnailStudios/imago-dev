@@ -18,7 +18,7 @@ import {
 	setQueuedTracks,
 } from "$ts/audio/audioPlayer.svelte";
 import { buildAudioGraph, audioCtx, applyEqToGraph } from "$ts/audio/audioGraph.svelte";
-import { isLocalPath, pathToSrc, isGhostTrack, markGhost, triggerOfflineMode, checkOnline, parseTrackData } from "$ts/audio/audioHelper";
+import { isLocalPath, pathToSrc, isGhostTrack, markGhost, triggerOfflineMode, checkOnline, parseTrackData, parseExtraPaths } from "$ts/audio/audioHelper";
 import { spacedShuffle, smartShuffle } from "$ts/audio/audioShuffles";
 
 let audio: HTMLAudioElement | null = null;
@@ -237,6 +237,31 @@ async function tryPlayWithSrc(track: Track, src: string): Promise<boolean> {
 	});
 }
 
+async function tryExtraPaths(track: Track, token: number, localOnly = false): Promise<boolean> {
+	for (const path of parseExtraPaths(track.extra_paths)) {
+		if (!isLocalPath(path)) continue;
+		const ok = await tryPlayWithSrc(track, pathToSrc(path));
+		if (token !== playToken) return false;
+		if (ok) {
+			scrobbleStart(track, "trackdone", true);
+			return true;
+		}
+	}
+
+	if (localOnly || offlineMode.offline) return false;
+
+	for (const path of parseExtraPaths(track.extra_remote_paths)) {
+		const ok = await tryPlayWithSrc(track, pathToSrc(path));
+		if (token !== playToken) return false;
+		if (ok) {
+			scrobbleStart(track, "trackdone", false);
+			return true;
+		}
+	}
+
+	return false;
+}
+
 async function playTrack(track: Track) {
 	const token = ++playToken;
 
@@ -269,6 +294,11 @@ async function playTrack(track: Track) {
 			return;
 		}
 
+		if (!hasRemote) {
+			if (await tryExtraPaths(track, token)) return;
+			if (token !== playToken) return;
+		}
+
 		await markGhost(track, true);
 		if (token !== playToken) return;
 
@@ -288,6 +318,8 @@ async function playTrack(track: Track) {
 				scrobbleStart(track, "trackdone", false);
 				return;
 			} else {
+				if (await tryExtraPaths(track, token, true)) return;
+				if (token !== playToken) return;
 				onTrackEnd(true);
 				return;
 			}
@@ -312,7 +344,11 @@ async function playTrack(track: Track) {
 					return;
 				}
 			}
+			if (await tryExtraPaths(track, token, true)) return;
+			if (token !== playToken) return;
 		} else {
+			if (await tryExtraPaths(track, token)) return;
+			if (token !== playToken) return;
 			await markGhost(track, true);
 			if (token !== playToken) return;
 			toast.warning("Cannot play track — stream unavailable.");

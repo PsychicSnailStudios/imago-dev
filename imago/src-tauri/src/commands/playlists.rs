@@ -283,6 +283,8 @@ fn ghost_track(entry: &serde_json::Value, uid: &str) -> Track {
         remote_data: None,
         track_data: Some("{\"is_ghost\":true}".to_string()),
         date_added: None,
+        extra_paths: None,
+        extra_remote_paths: None,
     }
 }
 

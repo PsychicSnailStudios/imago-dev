@@ -840,21 +840,12 @@ fn merge_tracks_blocking(
 	let mut tags = keep.tags.clone();
 	let mut genres = keep.genres.clone();
 	let mut albums = keep.albums.clone();
+	let (mut keep_locals, mut keep_remotes) = crate::db::track_paths::all_entries(&keep);
 
 	for d in &drops {
-		let path_value = if d.path.trim().is_empty() { None } else { Some(d.path.clone()) };
-		if fill_text("path", &path_value)? {
-			gained_location = true;
-			keep_conn
-				.execute(
-					"UPDATE tracks SET last_modified = ?1 WHERE uid = ?2",
-					params![d.last_modified, keep_uid],
-				)
-				.map_err(|e| e.to_string())?;
-		}
-		if fill_text("remote_path", &d.remote_path)? {
-			gained_location = true;
-		}
+		let (drop_locals, drop_remotes) = crate::db::track_paths::all_entries(d);
+		keep_locals.extend(drop_locals);
+		keep_remotes.extend(drop_remotes);
 		for (col, value) in [
 			("remote_data", &d.remote_data),
 			("format", &d.format),
@@ -877,6 +868,10 @@ fn merge_tracks_blocking(
 		genres = union_strings(&genres, &d.genres);
 		albums = union_album_entries(&albums, &d.albums);
 	}
+
+	gained_location = !keep_had_location && (!keep_locals.is_empty() || !keep_remotes.is_empty());
+	crate::db::track_paths::write_entries(&keep_conn, keep_uid, keep_locals, keep_remotes)
+		.map_err(|e| e.to_string())?;
 
 	keep_conn
 		.execute(

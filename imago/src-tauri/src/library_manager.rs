@@ -50,6 +50,7 @@ pub fn tune_conn(conn: &Connection) {
 	let _ = conn.execute_batch(
 		"PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 8000;",
 	);
+	crate::db::ensure_track_path_columns(conn);
 }
 
 pub fn open_tuned<P: AsRef<std::path::Path>>(path: P) -> Result<Connection, String> {
@@ -613,7 +614,7 @@ fn copy_tracks(
 		let sql = format!(
 			"SELECT uid, path, last_modified, title, artists, album_artist, albums, genres, year,
 			rating, tags, duration_ms, bpm, key, credits, label, artwork_blob, artwork_path,
-			artwork_thumb, user_options, format, bitrate, remote_path, remote_data, track_data, date_added
+			artwork_thumb, user_options, format, bitrate, remote_path, remote_data, track_data, date_added, extra_paths, extra_remote_paths
 			FROM tracks{}",
 			clause
 		);
@@ -624,9 +625,9 @@ fn copy_tracks(
 				uid, path, last_modified, title, artists, album_artist, albums, genres, year,
 				rating, tags, duration_ms, bpm, key, credits, label, artwork_blob, artwork_path,
 				artwork_thumb, user_options, format, bitrate, remote_path, remote_data, track_data,
-				date_added, source_lib_uid
+				date_added, extra_paths, extra_remote_paths, source_lib_uid
 			) VALUES (
-				?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,COALESCE(?26, 0),?27
+				?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,COALESCE(?26, 0),?27,?28,?29
 			)
 			ON CONFLICT(uid) DO UPDATE SET
 				path           = excluded.path,
@@ -654,10 +655,12 @@ fn copy_tracks(
 				remote_data    = excluded.remote_data,
 				track_data     = excluded.track_data,
 				date_added     = excluded.date_added,
+				extra_paths    = excluded.extra_paths,
+				extra_remote_paths = excluded.extra_remote_paths,
 				source_lib_uid = excluded.source_lib_uid",
 		)?;
 		while let Some(row) = rows.next()? {
-			let mut vals = read_row_values(row, 26)?;
+			let mut vals = read_row_values(row, 28)?;
 			if let rusqlite::types::Value::Text(ref uid) = vals[0] {
 				if blocklist.contains(uid) {
 					continue;

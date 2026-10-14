@@ -229,6 +229,119 @@ pub async fn delete_track_file(
     .await
 }
 
+fn repoint_tracks_everywhere(
+    profile_uid: &str,
+    remaps: &std::collections::HashMap<String, (String, String)>,
+) {
+    if remaps.is_empty() {
+        return;
+    }
+
+    let playlists_path = crate::profiles::get_playlists_db_path(profile_uid);
+    if playlists_path.exists() {
+        if let Ok(conn) = library_manager::open_tuned(&playlists_path) {
+            let rows: Vec<(String, String)> = match conn
+                .prepare("SELECT uid, tracks FROM playlists WHERE tracks IS NOT NULL")
+            {
+                Ok(mut stmt) => stmt
+                    .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+                    .map(|rows| rows.filter_map(|r| r.ok()).collect())
+                    .unwrap_or_default(),
+                Err(_) => Vec::new(),
+            };
+            let tx = conn.unchecked_transaction().ok();
+            for (playlist_uid, json) in rows {
+                let Ok(list) = serde_json::from_str::<Vec<serde_json::Value>>(&json) else {
+                    continue;
+                };
+                let uid_of = |e: &serde_json::Value| -> String {
+                    e.get("uid").and_then(|v| v.as_str()).unwrap_or("").to_string()
+                };
+                if !list.iter().any(|e| remaps.contains_key(&uid_of(e))) {
+                    continue;
+                }
+                let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+                let mut rebuilt: Vec<serde_json::Value> = Vec::new();
+                for mut entry in list {
+                    let mut uid = uid_of(&entry);
+                    if let Some((keep_uid, keep_name)) = remaps.get(&uid) {
+                        if let Some(obj) = entry.as_object_mut() {
+                            obj.insert("uid".into(), serde_json::Value::String(keep_uid.clone()));
+                            obj.insert("name".into(), serde_json::Value::String(keep_name.clone()));
+                        }
+                        uid = keep_uid.clone();
+                    }
+                    if !seen.insert(uid) {
+                        continue;
+                    }
+                    rebuilt.push(entry);
+                }
+                for (i, entry) in rebuilt.iter_mut().enumerate() {
+                    if let Some(obj) = entry.as_object_mut() {
+                        obj.insert("order".into(), serde_json::json!(i + 1));
+                    }
+                }
+                if let Ok(out) = serde_json::to_string(&rebuilt) {
+                    let _ = conn.execute(
+                        "UPDATE playlists SET tracks = ?1 WHERE uid = ?2",
+                        rusqlite::params![out, playlist_uid],
+                    );
+                }
+            }
+            if let Some(tx) = tx {
+                let _ = tx.commit();
+            }
+        }
+    }
+
+    if let Ok(analytics) = crate::open_analytics_conn(profile_uid) {
+        let _ = analytics.execute_batch(
+            "CREATE TEMP TABLE IF NOT EXISTS track_remap (old_uid TEXT PRIMARY KEY, new_uid TEXT NOT NULL);
+             DELETE FROM track_remap;",
+        );
+        if let Ok(tx) = analytics.unchecked_transaction() {
+            for (old_uid, (new_uid, _)) in remaps {
+                let _ = analytics.execute(
+                    "INSERT OR REPLACE INTO track_remap (old_uid, new_uid) VALUES (?1, ?2)",
+                    rusqlite::params![old_uid, new_uid],
+                );
+            }
+            let _ = analytics.execute(
+                "UPDATE scrobbles SET track_uid = (SELECT new_uid FROM track_remap WHERE old_uid = track_uid)
+                 WHERE track_uid IN (SELECT old_uid FROM track_remap)",
+                [],
+            );
+            let _ = tx.commit();
+        }
+    }
+
+    let settings_conn = open_settings_conn(profile_uid);
+    for (old_uid, (new_uid, _)) in remaps {
+        let _ = db::settings_manager::add_uid_remap(&settings_conn, old_uid, new_uid, "track");
+    }
+}
+
+fn cluster_by_album(tracks: Vec<Track>) -> Vec<Vec<Track>> {
+    let mut clusters: Vec<Vec<Track>> = Vec::new();
+    for track in tracks {
+        let position = clusters.iter().position(|cluster| {
+            cluster
+                .iter()
+                .any(|member| db::track_paths::same_album(&member.albums, &track.albums))
+        });
+        match position {
+            Some(i) => clusters[i].push(track),
+            None => clusters.push(vec![track]),
+        }
+    }
+    clusters
+}
+
+#[derive(serde::Serialize)]
+pub struct AutoMergeResult {
+    pub merged: usize,
+}
+
 #[tauri::command]
 pub async fn merge_remote_local_tracks(
     app: AppHandle,
@@ -259,6 +372,89 @@ pub async fn merge_remote_local_tracks(
         Ok(())
     })
     .await
+}
+
+#[tauri::command]
+pub async fn auto_merge_duplicates_cmd(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<AutoMergeResult, String> {
+    let profile_uid = state.get_uid();
+    let result = library_manager::run_blocking(move || {
+        let mut merged = 0usize;
+        let mut remaps: std::collections::HashMap<String, (String, String)> =
+            std::collections::HashMap::new();
+
+        for lib in library_manager::writable_libraries(&profile_uid)? {
+            let conn = library_manager::open_tuned(&lib.file_path)?;
+            conn.busy_timeout(std::time::Duration::from_secs(60)).ok();
+            let groups = db::find_duplicates(&conn).map_err(|e| e.to_string())?;
+
+            let mut touched_tracks: Vec<String> = Vec::new();
+            let mut touched_albums: Vec<String> = Vec::new();
+
+            let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+            for group in groups {
+                for cluster in cluster_by_album(group.tracks) {
+                    if cluster.len() < 2 {
+                        continue;
+                    }
+                    let keeper_idx = (0..cluster.len())
+                        .max_by(|&a, &b| {
+                            db::track_paths::keeper_score(&cluster[a])
+                                .cmp(&db::track_paths::keeper_score(&cluster[b]))
+                                .then(cluster[b].id.cmp(&cluster[a].id))
+                        })
+                        .unwrap_or(0);
+                    let keeper = cluster[keeper_idx].clone();
+                    let keeper_name = keeper.title.clone().unwrap_or_default();
+
+                    for (i, other) in cluster.iter().enumerate() {
+                        if i == keeper_idx {
+                            continue;
+                        }
+                        match db::track_paths::merge_track_rows(&conn, &keeper.uid, &other.uid) {
+                            Ok(albums) => {
+                                merged += 1;
+                                touched_tracks.push(other.uid.clone());
+                                touched_albums.extend(albums);
+                                remaps.insert(
+                                    other.uid.clone(),
+                                    (keeper.uid.clone(), keeper_name.clone()),
+                                );
+                            }
+                            Err(e) => eprintln!("[merge] failed to merge {}: {e}", other.uid),
+                        }
+                    }
+                    touched_tracks.push(keeper.uid.clone());
+                }
+            }
+            tx.commit().map_err(|e| e.to_string())?;
+
+            touched_tracks.sort();
+            touched_tracks.dedup();
+            touched_albums.sort();
+            touched_albums.dedup();
+
+            if let Err(e) = library_manager::sync_entities(
+                &profile_uid,
+                &lib.uid,
+                &touched_tracks,
+                &touched_albums,
+                &[],
+            ) {
+                eprintln!("[merge] targeted merge failed, falling back to full update: {e}");
+                library_manager::incremental_update(&profile_uid, &[lib.uid.clone()])?;
+            }
+        }
+
+        repoint_tracks_everywhere(&profile_uid, &remaps);
+        Ok(AutoMergeResult { merged })
+    })
+    .await?;
+
+    app.emit("library:updated", ()).ok();
+    Ok(result)
 }
 
 #[tauri::command]

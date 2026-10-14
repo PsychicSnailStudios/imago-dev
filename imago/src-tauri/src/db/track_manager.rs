@@ -30,6 +30,10 @@ pub struct Track {
     pub remote_data: Option<String>,
     pub track_data: Option<String>,
     pub date_added: Option<i64>,
+    #[serde(default)]
+    pub extra_paths: Option<String>,
+    #[serde(default)]
+    pub extra_remote_paths: Option<String>,
 }
 
 // ─── JSON field helpers ─────────────────────────────────────────────────────
@@ -158,7 +162,7 @@ pub fn upsert_track(conn: &Connection, track: &Track) -> Result<()> {
     if uid_exists {
         conn.execute(
             "UPDATE tracks SET
-				path          = ?2,
+				path          = CASE WHEN ?2 = '' THEN path ELSE ?2 END,
 				last_modified = ?3,
 				title         = ?4,
 				artists       = ?5,
@@ -176,11 +180,11 @@ pub fn upsert_track(conn: &Connection, track: &Track) -> Result<()> {
 				artwork_thumb = COALESCE(?17, artwork_thumb),
 				artwork_path  = ?18,
 				user_options  = ?19,
-				format        = ?20,
-				bitrate       = ?21,
-				remote_path   = ?22,
-				remote_data   = ?23,
-				track_data    = ?24
+				format        = CASE WHEN ?2 = '' AND COALESCE(path, '') != '' THEN format ELSE ?20 END,
+				bitrate       = CASE WHEN ?2 = '' AND COALESCE(path, '') != '' THEN bitrate ELSE ?21 END,
+				remote_path   = CASE WHEN COALESCE(?22, '') = '' THEN remote_path ELSE ?22 END,
+				remote_data   = CASE WHEN ?23 IS NULL THEN remote_data ELSE ?23 END,
+				track_data    = CASE WHEN ?2 = '' AND COALESCE(path, '') != '' THEN track_data ELSE ?24 END
 			WHERE uid = ?1",
             params![
                 track_uid,
@@ -284,7 +288,7 @@ pub fn delete_track_by_uid(conn: &Connection, uid: &str) -> Result<()> {
 
 pub fn get_all_tracks(conn: &Connection) -> Result<Vec<Track>> {
     let mut stmt = conn.prepare(
-		"SELECT id, uid, path, last_modified, title, artists, album_artist, albums, genres, year, rating, tags, duration_ms, bpm, key, credits, label, format, bitrate, artwork_path, artwork_thumb, user_options, remote_path, remote_data, track_data, date_added
+		"SELECT id, uid, path, last_modified, title, artists, album_artist, albums, genres, year, rating, tags, duration_ms, bpm, key, credits, label, format, bitrate, artwork_path, artwork_thumb, user_options, remote_path, remote_data, track_data, date_added, extra_paths, extra_remote_paths
 		 FROM tracks ORDER BY album_artist, albums, title"
 	)?;
     let tracks = stmt
@@ -317,6 +321,8 @@ pub fn get_all_tracks(conn: &Connection) -> Result<Vec<Track>> {
                 remote_data: row.get(23)?,
                 track_data: row.get(24)?,
                 date_added: row.get(25)?,
+                extra_paths: row.get(26)?,
+                extra_remote_paths: row.get(27)?,
             })
         })?
         .collect::<Result<Vec<_>>>()?;
@@ -325,7 +331,7 @@ pub fn get_all_tracks(conn: &Connection) -> Result<Vec<Track>> {
 
 pub fn get_track_by_uid(conn: &Connection, uid: &str) -> Result<Option<Track>> {
     let mut stmt = conn.prepare(
-		"SELECT id, uid, path, last_modified, title, artists, album_artist, albums, genres, year, rating, tags, duration_ms, bpm, key, credits, label, format, bitrate, artwork_path, artwork_thumb, user_options, remote_path, remote_data, track_data, date_added
+		"SELECT id, uid, path, last_modified, title, artists, album_artist, albums, genres, year, rating, tags, duration_ms, bpm, key, credits, label, format, bitrate, artwork_path, artwork_thumb, user_options, remote_path, remote_data, track_data, date_added, extra_paths, extra_remote_paths
 		 FROM tracks WHERE uid = ?1"
 	)?;
     let mut rows = stmt.query(params![uid])?;
@@ -358,6 +364,8 @@ pub fn get_track_by_uid(conn: &Connection, uid: &str) -> Result<Option<Track>> {
             remote_data: row.get(23)?,
             track_data: row.get(24)?,
             date_added: row.get(25)?,
+            extra_paths: row.get(26)?,
+            extra_remote_paths: row.get(27)?,
         }))
     } else {
         Ok(None)
@@ -386,7 +394,7 @@ pub fn get_track_artwork_by_uid(conn: &Connection, uid: &str) -> Result<Option<V
 
 pub fn find_duplicates(conn: &Connection) -> Result<Vec<DuplicateGroup>> {
     let mut stmt = conn.prepare(
-		"SELECT id, uid, path, last_modified, title, artists, album_artist, albums, genres, year, rating, tags, duration_ms, bpm, key, credits, label, format, bitrate, artwork_path, artwork_thumb, user_options, remote_path, remote_data, track_data, date_added
+		"SELECT id, uid, path, last_modified, title, artists, album_artist, albums, genres, year, rating, tags, duration_ms, bpm, key, credits, label, format, bitrate, artwork_path, artwork_thumb, user_options, remote_path, remote_data, track_data, date_added, extra_paths, extra_remote_paths
 		 FROM tracks
 		 WHERE title IS NOT NULL AND LOWER(TRIM(title)) IN (
 			 SELECT LOWER(TRIM(title)) FROM tracks
@@ -426,6 +434,8 @@ pub fn find_duplicates(conn: &Connection) -> Result<Vec<DuplicateGroup>> {
                 remote_data: row.get(23)?,
                 track_data: row.get(24)?,
                 date_added: row.get(25)?,
+                extra_paths: row.get(26)?,
+                extra_remote_paths: row.get(27)?,
             })
         })?
         .collect::<Result<Vec<_>>>()?;

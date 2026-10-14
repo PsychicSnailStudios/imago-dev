@@ -72,6 +72,8 @@ pub fn search_tracks(conn: &Connection, query: &str) -> Result<Vec<Track>> {
                 remote_data: row.get(23)?,
                 track_data: row.get(24)?,
                 date_added: row.get(25)?,
+                extra_paths: None,
+                extra_remote_paths: None,
             })
         })?
         .collect::<Result<Vec<_>>>()?;
@@ -213,7 +215,7 @@ pub fn get_tracks_by_uids(conn: &Connection, uids: &[String]) -> Result<Vec<Trac
         "SELECT id, uid, path, last_modified, title, artists, album_artist, albums,
                 genres, year, rating, tags, duration_ms, bpm, key, credits, label,
                 format, bitrate, artwork_path, artwork_thumb, user_options,
-                remote_path, remote_data, track_data, date_added
+                remote_path, remote_data, track_data, date_added, extra_paths, extra_remote_paths
          FROM tracks
          WHERE uid IN ({})",
         placeholders
@@ -251,6 +253,8 @@ pub fn get_tracks_by_uids(conn: &Connection, uids: &[String]) -> Result<Vec<Trac
                 remote_data: row.get(23)?,
                 track_data: row.get(24)?,
                 date_added: row.get(25)?,
+                extra_paths: row.get(26)?,
+                extra_remote_paths: row.get(27)?,
             })
         })?
         .collect::<Result<Vec<_>>>()?;

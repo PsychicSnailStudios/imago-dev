@@ -6,6 +6,7 @@
 	import { Checkbox } from "$shadcn/checkbox/index.js";
 	import ScrollArea from "$lib/components/custom/ScrollView.svelte";
 	import { Button, buttonVariants } from "$shadcn/button/index.js";
+	import { toast } from "svelte-sonner";
 
 	import SearchBar from "$lib/components/custom/search/SearchBar.svelte";
 	import TrackRow from "$lib/components/pages/library-manager/TrackRow.svelte";
@@ -23,6 +24,7 @@
 		removeAlbums,
 		removeArtists,
 		getDuplicates,
+		autoMergeDuplicates,
 	} from "$ts/library/libraryManager";
 	import { enrichAlbums, enrichArtists, enrichTracks, enrichAllAlbums, enrichAllArtists, enrichAllTracks } from "$ts/library/enrichment";
 	import { searchTracks, searchAlbums, searchArtists, onLibraryChange } from "$ts/store/library.svelte";
@@ -282,6 +284,21 @@
 		duplicatesLoaded = false;
 		duplicates = await getDuplicates();
 		duplicatesLoaded = true;
+	}
+
+	let mergingDuplicates = $state(false);
+
+	async function mergeMatchingDuplicates() {
+		mergingDuplicates = true;
+		try {
+			const merged = await autoMergeDuplicates();
+			toast.success(merged > 0 ? `Merged ${merged} duplicate ${merged === 1 ? "track" : "tracks"}` : "No matching duplicates to merge");
+			await loadDuplicates();
+		} catch (e) {
+			toast.error(`Merge failed: ${e}`);
+		} finally {
+			mergingDuplicates = false;
+		}
 	}
 
 	function onDuplicateResolved(uid: string) {
@@ -572,6 +589,12 @@
 
 				<Tabs.Content value="duplicates">
 					<div class="flex flex-col gap-2 pt-2">
+						<div class="flex items-center gap-2">
+							<Button size="sm" disabled={mergingDuplicates || !duplicatesLoaded || duplicates.length === 0} onclick={mergeMatchingDuplicates}>
+								{mergingDuplicates ? "Merging…" : "Merge matching duplicates"}
+							</Button>
+							<span class="text-xs text-muted-foreground">Merges copies of the same song on the same album. Other matches stay below for review.</span>
+						</div>
 						{#if !duplicatesLoaded}
 							<p class="text-sm text-muted-foreground">Loading…</p>
 						{:else if duplicates.length === 0}

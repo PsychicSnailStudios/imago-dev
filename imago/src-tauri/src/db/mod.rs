@@ -11,6 +11,7 @@ pub mod search_manager;
 pub mod settings_manager;
 pub mod tag_manager;
 pub mod track_manager;
+pub mod track_paths;
 
 pub use album_manager::*;
 pub use artist_manager::*;
@@ -22,6 +23,32 @@ pub use settings_manager::*;
 pub use track_manager::*;
 
 use rusqlite::{Connection, Result};
+
+pub fn ensure_track_path_columns(conn: &Connection) {
+    let has_table: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'tracks'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+    if has_table == 0 {
+        return;
+    }
+    let have: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('tracks') WHERE name IN ('extra_paths', 'extra_remote_paths')",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+    if have >= 2 {
+        return;
+    }
+    for column in ["extra_paths", "extra_remote_paths"] {
+        let _ = conn.execute(&format!("ALTER TABLE tracks ADD COLUMN {} TEXT", column), []);
+    }
+}
 
 pub fn generate_uid(prefix: &str) -> String {
     format!("{}-{}", prefix, Uuid::new_v4())
@@ -163,6 +190,8 @@ pub fn init_library_db(conn: &Connection) -> Result<()> {
 			remote_path TEXT,
 			remote_data TEXT,
 			track_data TEXT,
+			extra_paths TEXT,
+			extra_remote_paths TEXT,
 			date_added INTEGER NOT NULL DEFAULT (strftime('%s','now'))
 		);
 
@@ -260,6 +289,8 @@ pub fn init_merged_db(conn: &Connection) -> Result<()> {
 			remote_path TEXT,
 			remote_data TEXT,
 			track_data TEXT,
+			extra_paths TEXT,
+			extra_remote_paths TEXT,
 			date_added INTEGER NOT NULL DEFAULT 0,
 			source_lib_uid TEXT NOT NULL DEFAULT '',
 			is_local_override INTEGER NOT NULL DEFAULT 0
@@ -389,6 +420,8 @@ pub fn init_lib_db(conn: &Connection) -> Result<()> {
 			remote_path TEXT,
 			remote_data TEXT,
 			track_data TEXT,
+			extra_paths TEXT,
+			extra_remote_paths TEXT,
 			date_added INTEGER NOT NULL DEFAULT (strftime('%s','now'))
 		);
 

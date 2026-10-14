@@ -288,14 +288,8 @@ fn process_event(
         }
         EventKind::Remove(_) => {
             let path_str = path.to_string_lossy().to_string();
-            if is_remote_path(&path_str) {
-                conn.execute(
-                    "DELETE FROM tracks WHERE remote_path = ?1",
-                    rusqlite::params![path_str],
-                )
-                .ok();
-            } else {
-                crate::db::delete_track(&conn, &path_str).ok();
+            if let Err(e) = crate::db::track_paths::detach_exact(&conn, &path_str) {
+                eprintln!("[watcher] detach failed for {:?}: {e}", path);
             }
             trigger_merge_update(app, profile_uid, lib_uid);
             eprintln!("[watcher] Deleted: {:?}", path);

@@ -284,12 +284,6 @@ fn path_condition(key: &str) -> String {
     )
 }
 
-fn track_uids_under_path(conn: &Connection, key: &str) -> rusqlite::Result<Vec<String>> {
-    let mut stmt = conn.prepare(&format!("SELECT uid FROM tracks WHERE {}", path_condition(key)))?;
-    let rows = stmt.query_map(rusqlite::params![key], |row| row.get::<_, String>(0))?;
-    rows.collect()
-}
-
 fn delete_tracks_under_path(conn: &Connection, key: &str) -> rusqlite::Result<usize> {
     let cond = path_condition(key);
     conn.execute(
@@ -366,8 +360,9 @@ fn remove_tracks_and_orphans(
     if remove_path_row {
         delete_library_path_row(conn, key).map_err(|e| e.to_string())?;
     }
-    let tracks = track_uids_under_path(conn, key).map_err(|e| e.to_string())?;
-    delete_tracks_under_path(conn, key).map_err(|e| e.to_string())?;
+    let (mut tracks, modified) =
+        crate::db::track_paths::detach_prefix(conn, key).map_err(|e| e.to_string())?;
+    tracks.extend(modified);
     let (albums, artists) = delete_orphans(conn).map_err(|e| e.to_string())?;
     tx.commit().map_err(|e| e.to_string())?;
     Ok(Removed {

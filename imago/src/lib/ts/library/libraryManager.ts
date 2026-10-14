@@ -148,6 +148,11 @@ export async function removeArtists(uids: string[]): Promise<void> {
 
 // ─── Duplicate Actions ───────────────────────────────────────────────────────
 
+export async function autoMergeDuplicates(): Promise<number> {
+	const result = await invoke<{ merged: number }>("auto_merge_duplicates_cmd");
+	return result.merged;
+}
+
 export async function getDuplicates(): Promise<DuplicateGroup[]> {
 	return await invoke<DuplicateGroup[]>("get_duplicates");
 }
