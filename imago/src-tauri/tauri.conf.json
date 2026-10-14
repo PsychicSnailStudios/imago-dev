@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "imago",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "identifier": "com.imago.dev",
   "build": {
     "frontendDist": "../build",
@@ -26,16 +26,18 @@
       }
     ],
     "macOSPrivateApi": true,
-	"security": {
-	  "csp": "default-src 'self' ipc: http://ipc.localhost; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost artwork: http://artwork.localhost blob: data:; media-src 'self' asset: http://asset.localhost blob: https:",
-	  "assetProtocol": {
-	    "enable": true,
-	    "scope": {
-	      "allow": ["**/*"],
-	      "requireLiteralLeadingDot": false
-	    }
-	  }
-	}
+    "security": {
+      "csp": "default-src 'self' ipc: http://ipc.localhost; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost artwork: http://artwork.localhost blob: data:; media-src 'self' asset: http://asset.localhost blob: https:",
+      "assetProtocol": {
+        "enable": true,
+        "scope": {
+          "allow": [
+            "**/*"
+          ],
+          "requireLiteralLeadingDot": false
+        }
+      }
+    }
   },
   "bundle": {
     "createUpdaterArtifacts": true,
@@ -55,18 +57,20 @@
       "assets/artwork/*"
     ]
   },
-	"plugins": {
-		"updater": {
-			"pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDNBMTc5MkRENDZERDk4QkEKUldTNm1OMUczWklYT3F1Y0lTZDQ0M0JCRDEwK3Jib0tmd3d6WWhaUG5UUkFha3pDb1hhanV5dHQK",
-			"endpoints": [
-				"https://github.com/PsychicSnailStudios/imago-dev/releases/latest/download/latest.json"
-			]
-		},
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDNBMTc5MkRENDZERDk4QkEKUldTNm1OMUczWklYT3F1Y0lTZDQ0M0JCRDEwK3Jib0tmd3d6WWhaUG5UUkFha3pDb1hhanV5dHQK",
+      "endpoints": [
+        "https://github.com/PsychicSnailStudios/imago-dev/releases/latest/download/latest.json"
+      ]
+    },
     "deep-link": {
       "mobile": [],
       "desktop": {
-          "schemes": ["imago"]
+        "schemes": [
+          "imago"
+        ]
       }
     }
-	}
+  }
 }
