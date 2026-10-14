@@ -60,26 +60,45 @@
 </script>
 
 <div class="flex flex-col gap-4">
-	<div class="flex flex-col gap-4 p-3 bg-muted rounded-md">
-		<div class="space-y-2">
-			<h2 class="text-sm font-semibold">Metadata Priority</h2>
-			<p class="text-xs text-muted-foreground">File Tag uses embedded tags with filename as fallback. Filename override prefers the filename. Folder uses the folder structure as the override source.</p>
-			{#each ["filename_priority_title", "filename_priority_artist", "filename_priority_album", "filename_priority_year"] as key}
-				<div class="flex items-center justify-between gap-4">
-					<label class="text-sm w-24">{SETTING_LABELS[key]}</label>
-					<select
-						class="flex-1 border rounded px-3 py-2 text-sm bg-background"
-						value={settings[key] ?? "tag"}
-						onchange={(e) => saveSetting(key, (e.target as HTMLSelectElement).value)}
-					>
-						{#each PRIORITY_OPTIONS as opt}
-							<option value={opt.value}>{opt.label}</option>
-						{/each}
-					</select>
-				</div>
-			{/each}
+
+	<div class="flex flex-col gap-3 p-3 bg-muted rounded-md">
+		<p class="text-xs text-muted-foreground">These run automatically when a path is scanned. Enrichment and lyrics fetch require an internet connection and will slow down scanning.</p>
+
+		<div class="flex items-center justify-between gap-4">
+			<div>
+				<label class="text-sm font-medium">Auto-enrich tracks</label>
+				<p class="text-xs text-muted-foreground">Fetch missing metadata from APIs during scan.</p>
+			</div>
+			<Switch
+				checked={settings["auto_enrich_tracks"] === "true"}
+				onCheckedChange={(checked) => saveSetting("auto_enrich_tracks", checked ? "true" : "false")}
+			/>
 		</div>
 
+		<div class="flex items-center justify-between gap-4">
+			<div>
+				<label class="text-sm font-medium">Auto-enrich albums</label>
+				<p class="text-xs text-muted-foreground">Fetch album metadata after tracks are scanned.</p>
+			</div>
+			<Switch
+				checked={settings["auto_enrich_albums"] === "true"}
+				onCheckedChange={(checked) => saveSetting("auto_enrich_albums", checked ? "true" : "false")}
+			/>
+		</div>
+
+		<div class="flex items-center justify-between gap-4">
+			<div>
+				<label class="text-sm font-medium">Auto-fetch lyrics</label>
+				<p class="text-xs text-muted-foreground">Fetch lyrics from lrclib for each track during scan.</p>
+			</div>
+			<Switch
+				checked={settings["auto_fetch_lyrics"] === "true"}
+				onCheckedChange={(checked) => saveSetting("auto_fetch_lyrics", checked ? "true" : "false")}
+			/>
+		</div>
+	</div>
+
+	<div class="flex flex-col gap-3 p-3 bg-muted rounded-md">
 		<div class="space-y-2">
 			<Label class="text-sm font-medium">Custom Filename Pattern</Label>
 			<p class="text-xs text-muted-foreground">
@@ -119,6 +138,27 @@
 					onCheckedChange={(checked) => saveSetting("scan_try_parse_ampersand", checked ? "true" : "false")}
 				/>
 			</div>
+		</div>
+	</div>
+	
+	<div class="flex flex-col gap-4 p-3 bg-muted rounded-md">
+		<div class="space-y-2">
+			<h2 class="text-sm font-semibold">Metadata Priority</h2>
+			<p class="text-xs text-muted-foreground">File Tag uses embedded tags with filename as fallback. Filename override prefers the filename. Folder uses the folder structure as the override source.</p>
+			{#each ["filename_priority_title", "filename_priority_artist", "filename_priority_album", "filename_priority_year"] as key}
+				<div class="flex items-center justify-between gap-4">
+					<label class="text-sm w-24">{SETTING_LABELS[key]}</label>
+					<select
+						class="flex-1 border rounded px-3 py-2 text-sm bg-background"
+						value={settings[key] ?? "tag"}
+						onchange={(e) => saveSetting(key, (e.target as HTMLSelectElement).value)}
+					>
+						{#each PRIORITY_OPTIONS as opt}
+							<option value={opt.value}>{opt.label}</option>
+						{/each}
+					</select>
+				</div>
+			{/each}
 		</div>
 	</div>
 </div>

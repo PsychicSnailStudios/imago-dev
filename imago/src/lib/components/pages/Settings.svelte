@@ -20,10 +20,10 @@
 	const TABS = [
 		{ id: "general", label: "General" },
 		{ id: "eq", label: "EQ" },
-		{ id: "metadata", label: "Local Metadata" },
-		{ id: "scan", label: "Scan" },
+		{ id: "metadata", label: "Library & Metadata" },
+		// { id: "scan", label: "Scanning" },
 		{ id: "accounts", label: "Accounts" },
-		{ id: "apis", label: "Metadata APIs" },
+		{ id: "apis", label: "APIs" },
 		{ id: "downloads", label: "Downloads" },
 	];
 
@@ -64,13 +64,13 @@
 	<ScrollArea class="h-full w-full min-h-0 min-w-0">
 		<div class="p-2 pr-4">
 			{#if activeTab === "general"}
-				<GeneralSettings />
+				<GeneralSettings {settings} {saveSetting} />
 			{:else if activeTab === "eq"}
 				<EQSettings />
 			{:else if activeTab === "metadata"}
 				<LocalMetadataSettings {settings} {saveSetting} />
-			{:else if activeTab === "scan"}
-				<ScanSettings {settings} {saveSetting} />
+			<!-- {:else if activeTab === "scan"}
+				<ScanSettings {settings} {saveSetting} /> -->
 			{:else if activeTab === "accounts"}
 				<AccountsSettings {settings} {saveSetting} />
 			{:else if activeTab === "apis"}

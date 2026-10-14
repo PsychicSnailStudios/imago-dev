@@ -13,6 +13,13 @@
 		{ value: "dark", label: "Dark" },
 	];
 
+	interface Props {
+		settings: Record<string, string>;
+		saveSetting: (key: string, value: string) => Promise<void>;
+	}
+
+	let { settings, saveSetting }: Props = $props();
+
 	let launchOnStartup = $state(false);
 	let startMinimized = $state(false);
 	let closeToTray = $state(false);
@@ -67,6 +74,18 @@
 				{/each}
 			</Select.Content>
 		</Select.Root>
+	</div>
+	
+
+	<div class="flex items-center justify-between gap-4 p-3 bg-muted rounded-md">
+		<div>
+			<label class="text-sm font-medium">Auto offline mode</label>
+			<p class="text-xs text-muted-foreground">Automatically switch to offline mode when a stream fails due to no internet connection.</p>
+		</div>
+		<Switch
+			checked={settings["offline_mode_auto"] === "true"}
+			onCheckedChange={(checked) => saveSetting("offline_mode_auto", checked ? "true" : "false")}
+		/>
 	</div>
 
 	<div class="flex items-center justify-between gap-4 p-3 bg-muted rounded-md">

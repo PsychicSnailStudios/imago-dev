@@ -58,7 +58,9 @@
 				/>
 			</div>
 		</div>
+	</div>
 
+	<div class="flex flex-col gap-4 p-3 bg-muted rounded-md">
 		<div class="space-y-2">
 			<h2 class="text-sm font-semibold">Enrichment Field Priority</h2>
 			<p class="text-xs text-muted-foreground">"Local" keeps your existing value and only fills blanks. "API" overwrites with API data if available.</p>

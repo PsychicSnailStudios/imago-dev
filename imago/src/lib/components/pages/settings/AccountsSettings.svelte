@@ -120,7 +120,6 @@
 
 <div class="flex flex-col gap-4">
 	<div class="flex flex-col gap-4 p-3 bg-muted rounded-md">
-
 		<!-- Last.fm -->
 		<div class="flex items-center justify-between gap-4">
 			<div class="flex flex-col gap-0.5">
@@ -153,8 +152,9 @@
 				/>
 			</div>
 		{/if}
-
-		<div class="border-t border-border" />
+	</div>
+	
+	<div class="flex flex-col gap-4 p-3 bg-muted rounded-md">
 
 		<!-- Spotify -->
 		<div class="flex items-center justify-between gap-4">
@@ -198,8 +198,9 @@
 				/>
 			</div>
 		{/if}
+	</div>
 
-		<div class="border-t border-border" />
+	<div class="flex flex-col gap-4 p-3 bg-muted rounded-md">
 
 		<!-- ListenBrainz -->
 		<div class="flex items-center justify-between gap-4">
