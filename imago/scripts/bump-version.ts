@@ -80,5 +80,6 @@ if (doGit) {
   // pass paths to commit so unrelated staged changes aren't swept in
   git("commit", "-m", `chore: bump version to ${next}`, "--", ...paths);
   git("tag", `v${next}`);
+  git("git push origin", `v${next}`);
   console.log(`Committed and tagged v${next}`);
 }
