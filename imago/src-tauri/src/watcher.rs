@@ -133,9 +133,13 @@ fn process_event(
     path: &PathBuf,
     kind: EventKind,
 ) {
-    // Open the specific library db this watcher is assigned to
-    let lib_path = get_library_db_path(profile_uid, lib_uid);
-    let conn = match Connection::open(&lib_path) {
+    let settings_path = get_settings_db_path(profile_uid);
+    let lib_path = Connection::open(&settings_path)
+        .ok()
+        .and_then(|c| crate::db::get_library_by_uid(&c, lib_uid).ok().flatten())
+        .map(|lib| PathBuf::from(lib.file_path))
+        .unwrap_or_else(|| get_library_db_path(profile_uid, lib_uid));
+    let conn = match crate::library_manager::open_tuned(&lib_path) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("[watcher] DB open error: {e}");
@@ -144,7 +148,6 @@ fn process_event(
     };
 
     // Attach settings.db so scanner setting reads work the same way
-    let settings_path = get_settings_db_path(profile_uid);
     if let Err(e) = conn.execute_batch(&format!(
         "ATTACH DATABASE '{}' AS settings;",
         settings_path.to_string_lossy().replace('\'', "''")

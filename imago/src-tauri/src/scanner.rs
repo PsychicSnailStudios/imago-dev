@@ -1921,6 +1921,11 @@ fn sanitize_component(name: &str) -> String {
 }
 
 #[allow(clippy::too_many_arguments)]
+fn frame_bitrate(path: &Path) -> Option<i64> {
+    let tagged = Probe::open(path).ok()?.guess_file_type().ok()?.read().ok()?;
+    tagged.properties().audio_bitrate().map(|b| b as i64)
+}
+
 fn read_remote_item(
     remote: &crate::webdav::RemoteFile,
     creds: Option<&str>,
@@ -1988,14 +1993,24 @@ fn read_remote_item(
             track.last_modified = remote.modified;
 
             if !is_complete && remote.size > 0 {
-                let lossy = matches!(
-                    track.format.as_deref().map(|f| f.to_uppercase()).as_deref(),
-                    Some("MP3") | Some("M4A") | Some("AAC") | Some("OGG") | Some("OPUS")
-                );
-                if lossy {
-                    if let Some(kbps) = track.bitrate.filter(|b| *b > 0) {
-                        track.duration_ms = Some((remote.size as i64 * 8) / kbps);
-                    }
+                let format = track
+                    .format
+                    .as_deref()
+                    .map(|f| f.to_uppercase())
+                    .unwrap_or_default();
+                let size_bits = remote.size as i64 * 8;
+                let reported = track.duration_ms.unwrap_or(0);
+                let implied = if reported > 0 { size_bits / reported } else { 0 };
+                let trust_reported = reported > 0
+                    && match format.as_str() {
+                        "FLAC" | "M4A" | "WAV" | "AIFF" => true,
+                        _ => implied >= 24 && implied <= 520,
+                    };
+                if trust_reported {
+                    track.bitrate = Some(implied);
+                } else if let Some(kbps) = frame_bitrate(&temp_path).filter(|b| *b > 0) {
+                    track.duration_ms = Some(size_bits / kbps);
+                    track.bitrate = Some(kbps);
                 }
             }
             result = Some(track);
