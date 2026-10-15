@@ -118,7 +118,7 @@
 
 			<div class="flex flex-col gap-1">
 				<span class="text-xs text-muted-foreground">{album.format ? album.format : "Album"}</span>
-				<h2 class="text-2xl font-bold">{album.title}</h2>
+				<h2 class="text-2xl font-bold">{album.title}{tags?.includes("favorite") ? " ★" : ""}</h2>
 				<div class="flex gap-3 text-sm text-muted-foreground flex-wrap">
 					{#if album.album_artist}
 						<span role="button" tabindex="0" onclick={() => { if (albumArtistUid) setSelection(albumArtistUid); }} onkeydown={(e) => { if (e.key === 'Enter' && albumArtistUid) setSelection(albumArtistUid); }} class="text-sm truncate cursor-pointer hover:underline">

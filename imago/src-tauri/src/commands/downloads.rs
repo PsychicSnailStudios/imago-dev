@@ -64,6 +64,16 @@ pub async fn download_track_cmd(
         .map(|n| format!("{:02}", n))
         .unwrap_or_else(|| "00".to_string());
 
+    let disc = track
+        .albums
+        .as_deref()
+        .and_then(|s| serde_json::from_str::<Vec<serde_json::Value>>(s).ok())
+        .and_then(|v| v.into_iter().next())
+        .and_then(|e| e.get("disc").and_then(|d| d.as_i64()))
+        .filter(|d| *d > 0)
+        .map(|d| d.to_string())
+        .unwrap_or_else(|| "1".to_string());
+
     let year = track
         .year
         .clone()
@@ -85,6 +95,7 @@ pub async fn download_track_cmd(
     let folder = path_style
         .replace("{artist}", &sanitize(&artist))
         .replace("{album}", &sanitize(&album))
+        .replace("{disc}", &disc)
         .replace("{year}", &sanitize(&year));
 
     let ext = if convert_mp3 {
@@ -100,6 +111,7 @@ pub async fn download_track_cmd(
 
     let filename_base = filename_style
         .replace("{track_number}", &track_number)
+        .replace("{disc}", &disc)
         .replace("{title}", &sanitize(&title))
         .replace("{artist}", &sanitize(&artist))
         .replace("{album}", &sanitize(&album))
