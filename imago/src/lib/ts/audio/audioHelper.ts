@@ -80,7 +80,8 @@ export async function markGhost(track: Track, isGhost: boolean) {
 
 let offlineModeToastShown = false;
 
-export function triggerOfflineMode() {
+export async function triggerOfflineMode() {
+	if (!(await getAutoOfflineSetting())) return;
 	offlineMode.offline = true;
 	if (offlineModeToastShown) return;
 	offlineModeToastShown = true;
@@ -118,7 +119,6 @@ export async function checkOnline(): Promise<boolean> {
 let cachedAutoOffline: boolean | null = null;
 
 export async function getAutoOfflineSetting(): Promise<boolean> {
-	if (cachedAutoOffline !== null) return cachedAutoOffline;
 	try {
 		const settings = await invoke<Array<{ key: string; value: string }>>("get_settings");
 		cachedAutoOffline = settings.find(s => s.key === "offline_mode_auto")?.value === "true";
