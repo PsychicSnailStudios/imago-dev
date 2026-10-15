@@ -458,6 +458,7 @@ pub fn run() {
 			commands::libraries::remove_from_blocklist_cmd,
 			commands::libraries::get_delete_preference_cmd,
 			commands::libraries::set_delete_preference_cmd,
+			commands::libraries::get_source_libraries_cmd,
 			// Connections
 			commands::connections::lastfm_get_auth_url,
 			commands::connections::lastfm_exchange_token_cmd,

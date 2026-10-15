@@ -15,11 +15,13 @@
 	import TagList from "$lib/components/custom/tags/TagList.svelte";
 
 	import { selection } from "$ts/store/session.svelte";
-	import { getArtist, getArtistAlbums, getArtists, onLibraryChange, onSingleChange } from "$ts/store/library.svelte";
+	import { getArtist, getArtistAlbums, getArtists, getTracks, onLibraryChange, onSingleChange } from "$ts/store/library.svelte";
+	import { queueTracksByObject } from "$ts/audio/audioManager.svelte";
+	import { isGhostTrack } from "$ts/audio/audioHelper";
 	import { openEditModal } from "$ts/ui/editModal.svelte";
 	import { currentArtistTab } from "$ts/store/session.svelte";
 	import type { Artist, Album } from "$ts/util/types";
-	import { parseTags } from "$ts/util/parsers";
+	import { parseTags, parseArtists, parseAlbumEntries } from "$ts/util/parsers";
 
 	let bannerUrl = $state<string | null>(null);
 	let artist = $state<Artist | null>(null);
@@ -28,6 +30,26 @@
 	let genres = $derived(artist?.genres ? parseTags(artist.genres) : null);
 	let tags = $derived(artist?.tags ? parseTags(artist.tags) : null);
 	let akaList = $derived<string[]>(artist?.aka ? (JSON.parse(artist.aka) as string[]) : []);
+
+	async function playArtist(shuffle: boolean) {
+		if (!artist) return;
+		const names = new Set([artist.name, ...akaList].map((n) => n.trim().toLowerCase()));
+		const all = await getTracks();
+		const tracks = all
+			.filter((t) => !isGhostTrack(t))
+			.filter(
+				(t) =>
+					parseArtists(t.artists).some((n) => names.has(n.trim().toLowerCase())) ||
+					names.has((t.album_artist ?? "").trim().toLowerCase())
+			)
+			.sort(
+				(a, b) =>
+					(parseAlbumEntries(a.albums)[0]?.name ?? "").localeCompare(parseAlbumEntries(b.albums)[0]?.name ?? "") ||
+					(parseAlbumEntries(a.albums)[0]?.track_number ?? 0) - (parseAlbumEntries(b.albums)[0]?.track_number ?? 0)
+			);
+		if (tracks.length === 0) return;
+		queueTracksByObject(tracks, true, shuffle, artist.uid);
+	}
 
 	async function loadArtist() {
 		const uid = selection.uid;
@@ -111,8 +133,8 @@
 			<div class="flex items-center gap-3">
 				<h2 class="text-2xl font-bold">{artist.name}</h2>
 				<div class="flex gap-2">
-					<Button variant="default">Play All</Button>
-					<Button variant="outline">Shuffle</Button>
+					<Button variant="default" onclick={() => playArtist(false)}>Play All</Button>
+					<Button variant="outline" onclick={() => playArtist(true)}>Shuffle</Button>
 					<Button variant="ghost" onclick={() => openEditModal({ type: "artist", uid: artist!.uid })}><Pencil/></Button>
 				</div>
 			</div>

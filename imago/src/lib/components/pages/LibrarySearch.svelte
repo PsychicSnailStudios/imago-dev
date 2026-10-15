@@ -24,6 +24,7 @@
 		loadLibraryRegistry,
 	} from "$ts/store/library.svelte";
 	import { searchHistory, type HistorySort } from "$ts/store/searchHistory.svelte";
+	import { ensureSourceLibraries } from "$ts/store/sourceLibraries.svelte";
 	import { parseTracks } from "$ts/audio/playlistManager.svelte";
 	import { parseArtists, parseArtistsToString, parseTags } from "$ts/util/parsers";
 	import { createColumnState } from "$ts/util/columnConfig.svelte";
@@ -108,6 +109,10 @@
 	const hasQuery = $derived(debouncedQuery.length >= 2);
 	const filterCount = $derived(countActiveFilters(filters));
 	const hasSearch = $derived(hasQuery || filterCount > 0);
+	$effect(() => {
+		if (filters.libraries.length > 0) ensureSourceLibraries();
+	});
+
 	const defaultLibUid = $derived(libraryStore.libraries.find((l) => l.is_default)?.uid ?? null);
 
 	const tracks = $derived(hasQuery ? filterTracks(trackResults, filters, defaultLibUid) : []);

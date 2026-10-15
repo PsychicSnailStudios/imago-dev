@@ -15,6 +15,43 @@ pub fn get_libraries(state: State<AppState>) -> Result<Vec<Library>, String> {
 }
 
 #[tauri::command]
+pub async fn get_source_libraries_cmd(
+    state: State<'_, AppState>,
+) -> Result<std::collections::HashMap<String, String>, String> {
+    let profile_uid = state.get_uid();
+    library_manager::run_blocking(move || {
+        let default_uid: String = open_settings_conn(&profile_uid)
+            .query_row(
+                "SELECT uid FROM libraries WHERE is_default = 1 LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or_default();
+
+        let conn = crate::open_merged_conn(&profile_uid);
+        let mut out: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        for table in ["tracks", "albums", "artists"] {
+            let mut stmt = conn
+                .prepare(&format!(
+                    "SELECT uid, source_lib_uid FROM {} WHERE source_lib_uid != '' AND source_lib_uid != ?1",
+                    table
+                ))
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map(rusqlite::params![default_uid], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })
+                .map_err(|e| e.to_string())?;
+            for (uid, lib_uid) in rows.flatten() {
+                out.insert(uid, lib_uid);
+            }
+        }
+        Ok(out)
+    })
+    .await
+}
+
+#[tauri::command]
 pub fn create_library_cmd(state: State<AppState>, name: String) -> Result<Library, String> {
     let uid = state.get_uid();
     library_manager::create_local_library(&uid, &name)

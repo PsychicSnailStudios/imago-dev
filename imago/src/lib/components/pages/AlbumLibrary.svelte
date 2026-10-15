@@ -8,9 +8,12 @@
 	import AudioCard from "$lib/components/custom/cards/AudioCard.svelte";
 	import ArtworkDisplay from "$lib/components/custom/ArtworkDisplay.svelte";
 	import SearchBar from "$lib/components/custom/search/SearchBar.svelte";
+	import SearchFilterPopover from "$lib/components/custom/search/SearchFilterPopover.svelte";
 	import MediaGrid from "$lib/layouts/MediaGrid.svelte";
 
-	import { getAlbums, searchAlbums, onLibraryChange } from "$ts/store/library.svelte";
+	import { getAlbums, searchAlbums, onLibraryChange, libraryStore, loadLibraryRegistry } from "$ts/store/library.svelte";
+	import { ensureSourceLibraries } from "$ts/store/sourceLibraries.svelte";
+	import { createEmptyFilters, filterAlbums, type SearchFilters } from "$ts/util/searchFilters";
 	import { setSelection } from "$ts/store/session.svelte";
 	import { createPersistedViewState } from "$ts/store/session.svelte";
 	import type { SortField } from "$ts/util/sortConfig.svelte";
@@ -18,6 +21,7 @@
 	import type { Album } from "$ts/util/types";
 
 	let search = $state("");
+	let filters = $state<SearchFilters>(createEmptyFilters());
 	let allAlbums = $state<Album[]>([]);
 	let searchResults = $state<Album[]>([]);
 
@@ -58,7 +62,19 @@
 		});
 	});
 
-	const filteredAlbums = $derived(search.trim().length < 2 ? sortedAlbums : searchResults);
+	$effect(() => {
+		if (filters.libraries.length > 0) ensureSourceLibraries();
+	});
+
+	const defaultLibUid = $derived(libraryStore.libraries.find((l) => l.is_default)?.uid ?? null);
+
+	$effect(() => {
+		if (!libraryStore.loaded) loadLibraryRegistry();
+	});
+
+	const filteredAlbums = $derived(
+		filterAlbums(search.trim().length < 2 ? sortedAlbums : searchResults, filters, defaultLibUid)
+	);
 
 	function toggleAlbumSort(field: "name" | "artist" | "year") {
 		if (view.sort.field === field) {
@@ -74,7 +90,10 @@
 
 	<div class="flex justify-between items-center gap-2 pr-4 pl-4">
 		<h1 class="h1">Albums</h1>
-		<SearchBar bind:search searchCount={filteredAlbums.length} />
+		<div class="flex items-center gap-2">
+			<SearchBar bind:search searchCount={filteredAlbums.length} />
+			<SearchFilterPopover bind:filters />
+		</div>
 	</div>
 
 	<div class="flex justify-between pr-4 pl-4">

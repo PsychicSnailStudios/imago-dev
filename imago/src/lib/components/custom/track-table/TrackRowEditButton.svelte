@@ -5,6 +5,7 @@
 	import Button from "$shadcn/button/button.svelte";
 
 	import TrackPlaylistContent from "$lib/components/context-menus/AddTrackToPlaylist.svelte";
+	import TrackTagRate from "$lib/components/custom/track-table/TrackTagRate.svelte";
 	import { setSelection } from "$ts/store/session.svelte";
 	import { addTrackToQueue } from "$ts/audio/audioManager.svelte";
 	import { openEditModal } from "$ts/ui/editModal.svelte";
@@ -44,6 +45,18 @@
 				<DropdownMenu.SubTrigger>Add to playlist</DropdownMenu.SubTrigger>
 				<DropdownMenu.SubContent class="w-64">
 					<TrackPlaylistContent bind:this={content} {track} />
+				</DropdownMenu.SubContent>
+			</DropdownMenu.Sub>
+			<DropdownMenu.Sub>
+				<DropdownMenu.SubTrigger>Add tag</DropdownMenu.SubTrigger>
+				<DropdownMenu.SubContent class="w-64">
+					<TrackTagRate {track} mode="tag" />
+				</DropdownMenu.SubContent>
+			</DropdownMenu.Sub>
+			<DropdownMenu.Sub>
+				<DropdownMenu.SubTrigger>Rate track</DropdownMenu.SubTrigger>
+				<DropdownMenu.SubContent class="w-56">
+					<TrackTagRate {track} mode="rate" />
 				</DropdownMenu.SubContent>
 			</DropdownMenu.Sub>
 		</DropdownMenu.Group>

@@ -6,14 +6,18 @@
 
 	import ArtworkDisplay from "$lib/components/custom/ArtworkDisplay.svelte";
 	import SearchBar from "$lib/components/custom/search/SearchBar.svelte";
+	import SearchFilterPopover from "$lib/components/custom/search/SearchFilterPopover.svelte";
 	import MediaGrid from "$lib/layouts/MediaGrid.svelte";
 
-	import { getArtists, searchArtists, onLibraryChange } from "$ts/store/library.svelte";
+	import { getArtists, searchArtists, onLibraryChange, libraryStore, loadLibraryRegistry } from "$ts/store/library.svelte";
+	import { ensureSourceLibraries } from "$ts/store/sourceLibraries.svelte";
+	import { createEmptyFilters, filterArtists, type SearchFilters } from "$ts/util/searchFilters";
 	import { setSelection } from "$ts/store/session.svelte";
 	import { createPersistedViewState } from "$ts/store/session.svelte";
 	import type { Artist } from "$ts/util/types";
 
 	let search = $state("");
+	let filters = $state<SearchFilters>(createEmptyFilters());
 	let allArtists = $state<Artist[]>([]);
 	let searchResults = $state<Artist[]>([]);
 
@@ -43,14 +47,29 @@
 		return [...allArtists].sort((a, b) => a.name.localeCompare(b.name) * dir);
 	});
 
-	const filteredArtists = $derived(search.trim().length >= 2 ? searchResults : sortedArtists);
+	$effect(() => {
+		if (filters.libraries.length > 0) ensureSourceLibraries();
+	});
+
+	const defaultLibUid = $derived(libraryStore.libraries.find((l) => l.is_default)?.uid ?? null);
+
+	$effect(() => {
+		if (!libraryStore.loaded) loadLibraryRegistry();
+	});
+
+	const filteredArtists = $derived(
+		filterArtists(search.trim().length >= 2 ? searchResults : sortedArtists, filters, defaultLibUid)
+	);
 </script>
 
 <div class="flex flex-col gap-2 pt-4 border-2 h-full w-full overflow-hidden rounded-md">
 
 	<div class="flex justify-between items-center gap-2 pr-4 pl-4">
 		<h1 class="h1">Artists</h1>
-		<SearchBar bind:search searchCount={filteredArtists.length} />
+		<div class="flex items-center gap-2">
+			<SearchBar bind:search searchCount={filteredArtists.length} />
+			<SearchFilterPopover bind:filters />
+		</div>
 	</div>
 
 	<div class="flex flex-col h-full w-full overflow-hidden gap-3 p-0.5">

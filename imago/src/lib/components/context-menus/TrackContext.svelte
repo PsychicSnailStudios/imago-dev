@@ -4,6 +4,7 @@
 	import * as ContextMenu from "$shadcn/context-menu/index.js";
 
 	import TrackPlaylistContent from "$lib/components/context-menus/AddTrackToPlaylist.svelte";
+	import TrackTagRate from "$lib/components/custom/track-table/TrackTagRate.svelte";
 
 	// SCRIPTS
 	import { setSelection } from "$ts/store/session.svelte";
@@ -53,6 +54,18 @@
 			<ContextMenu.SubTrigger>Add to playlist</ContextMenu.SubTrigger>
 			<ContextMenu.SubContent class="w-64">
 				<TrackPlaylistContent bind:this={content} {track} />
+			</ContextMenu.SubContent>
+		</ContextMenu.Sub>
+		<ContextMenu.Sub>
+			<ContextMenu.SubTrigger>Add tag</ContextMenu.SubTrigger>
+			<ContextMenu.SubContent class="w-64">
+				<TrackTagRate {track} mode="tag" />
+			</ContextMenu.SubContent>
+		</ContextMenu.Sub>
+		<ContextMenu.Sub>
+			<ContextMenu.SubTrigger>Rate track</ContextMenu.SubTrigger>
+			<ContextMenu.SubContent class="w-56">
+				<TrackTagRate {track} mode="rate" />
 			</ContextMenu.SubContent>
 		</ContextMenu.Sub>
 	</ContextMenu.Group>

@@ -1,4 +1,5 @@
 import { parseTags } from "$ts/util/parsers";
+import { sourceLibs } from "$ts/store/sourceLibraries.svelte";
 import type { Track, Album, Artist, Playlist } from "$ts/util/types";
 
 export type SearchFilters = {
@@ -52,7 +53,7 @@ function matchesList(raw: string | null, wanted: string[]): boolean {
 function matchesCommon(entity: Common, f: SearchFilters, defaultLibUid: string | null): boolean {
 	if (!matchesList(entity.tags, f.tags)) return false;
 	if (!matchesList(entity.genres, f.genres)) return false;
-	if (f.libraries.length > 0 && !f.libraries.includes(entity.source_lib_uid ?? defaultLibUid ?? "")) return false;
+	if (f.libraries.length > 0 && !f.libraries.includes(sourceLibs.map.get(entity.uid) ?? entity.source_lib_uid ?? defaultLibUid ?? "")) return false;
 	return true;
 }
 
