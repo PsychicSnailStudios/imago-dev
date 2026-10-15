@@ -308,6 +308,8 @@ fn trigger_merge_update(app: &AppHandle, profile_uid: &str, lib_uid: &str) {
     let lib_uid = lib_uid.to_string();
     let app = app.clone();
 
+    crate::commands::scrobbles::schedule_scrobble_relink(app.clone(), profile_uid.clone());
+
     tauri::async_runtime::spawn(async move {
         match crate::library_manager::incremental_update(&profile_uid, &[lib_uid]) {
             Ok(_) => {

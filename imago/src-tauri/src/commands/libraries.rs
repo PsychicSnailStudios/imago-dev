@@ -22,13 +22,17 @@ pub fn create_library_cmd(state: State<AppState>, name: String) -> Result<Librar
 
 #[tauri::command]
 pub async fn import_library_cmd(
+    app: AppHandle,
     state: State<'_, AppState>,
     name: String,
     sync_url: String,
     write_token: Option<String>,
 ) -> Result<Library, String> {
     let uid = state.get_uid();
-    library_manager::import_library(&uid, &name, &sync_url, write_token.as_deref()).await
+    let library =
+        library_manager::import_library(&uid, &name, &sync_url, write_token.as_deref()).await?;
+    crate::commands::scrobbles::schedule_scrobble_relink(app, uid);
+    Ok(library)
 }
 
 #[tauri::command]
@@ -106,6 +110,7 @@ pub async fn sync_library_cmd(
         let rebuild_uid = uid.clone();
         library_manager::run_blocking(move || library_manager::full_rebuild(&rebuild_uid)).await?;
         app.emit("library:updated", ()).ok();
+        crate::commands::scrobbles::schedule_scrobble_relink(app.clone(), uid.clone());
     }
     Ok(pulled)
 }
@@ -146,9 +151,15 @@ pub async fn check_write_permission_cmd(
 }
 
 #[tauri::command]
-pub async fn rebuild_merged_cmd(state: State<'_, AppState>) -> Result<MergeResult, String> {
+pub async fn rebuild_merged_cmd(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<MergeResult, String> {
     let uid = state.get_uid();
-    library_manager::run_blocking(move || library_manager::full_rebuild(&uid)).await
+    let relink_uid = uid.clone();
+    let result = library_manager::run_blocking(move || library_manager::full_rebuild(&uid)).await?;
+    crate::commands::scrobbles::schedule_scrobble_relink(app, relink_uid);
+    Ok(result)
 }
 
 #[tauri::command]

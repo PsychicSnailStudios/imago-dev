@@ -72,6 +72,14 @@
 			if (uid) loadSessionState(uid);
 			await loadLibrary();
 			setExplorePlaylists();
+			invoke<number>("relink_scrobbles_cmd")
+				.then((n) => {
+					if (n > 0) {
+						resetScrobbleCache();
+						scrobbleSignal.version++;
+					}
+				})
+				.catch(() => {});
 		}
 
 		await listen("profile:ready", async () => {

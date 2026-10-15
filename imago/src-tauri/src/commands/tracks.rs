@@ -454,6 +454,7 @@ pub async fn auto_merge_duplicates_cmd(
     .await?;
 
     app.emit("library:updated", ()).ok();
+    crate::commands::scrobbles::schedule_scrobble_relink(app, state.get_uid());
     Ok(result)
 }
 
